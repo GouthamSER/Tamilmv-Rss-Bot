@@ -134,7 +134,7 @@ class MN_Bot(Client):
                             resp = scraper.get(file["link"], timeout=10)
                             resp.raise_for_status()
                             file_bytes = io.BytesIO(resp.content)
-                            thumbnail ="https://ibb.co/Xr74g2gB"
+                            thumbnail ="https://i.ibb.co/bMs3ZWZh/IMG-20260910-232319-421.jpg"
                             filename = file["title"].replace(" ", "_") + ".torrent"
                             caption = (
                                 f"{file['title']}\n"
