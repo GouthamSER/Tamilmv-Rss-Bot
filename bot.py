@@ -279,14 +279,15 @@ class MN_Bot(Client):
                 .replace("|", "_")
             )
             
-            # Formatting filename exactly like the reference image
-            filename = f"RSS_@kutturss_bot{clean_title.replace(' ', '_')}.torrent"
+            # Reverted to standard filename structure
+            filename = f"{clean_title.replace(' ', '_')}.torrent"
             file_bytes.name = filename
 
-            # Formatting caption exactly like the reference image
+            # Reverted to standard caption
             caption = (
-                f"@RSS-KUTTU - {file['title']}\n\n"
-                f"> **Join For Latest Update @tamilmvkuttu**"
+                f"{file['title']}\n"
+                f"📦 {file['size']}\n"
+                f"#tbl #torrent"
             )
 
             if (
@@ -332,16 +333,18 @@ class MN_Bot(Client):
             return False
 
     async def auto_post_torrents(self):
-        logging.info(
-            "Automatic 1TamilMV posting started."
-        )
+        logging.info("Automatic 1TamilMV posting started.")
+        is_first_run = True  # Flag to track bot startup
 
         while True:
             try:
                 torrents = crawl_tbl()
                 
-                # Reversing the list posts the newest torrents LAST so they appear at the bottom of the Telegram channel.
+                # Reversing the list posts the newest torrents LAST
                 torrents.reverse()
+
+                if is_first_run:
+                    logging.info("First run detected. Caching current torrents silently to avoid spamming old posts.")
 
                 for torrent in torrents:
                     topic = torrent["topic_url"]
@@ -349,47 +352,40 @@ class MN_Bot(Client):
                     new_files = [
                         file
                         for file in torrent["links"]
-                        if file["link"]
-                        not in self.last_posted
+                        if file["link"] not in self.last_posted
                     ]
 
-                    if (
-                        topic in self.seen_topics
-                        and not new_files
-                    ):
+                    if topic in self.seen_topics and not new_files:
                         continue
 
-                    logging.info(
-                        f"Topic: {torrent['title']}"
-                    )
+                    # If this is the bot's first run after a restart, skip sending
+                    # and just record the torrents in memory so they aren't sent later.
+                    if is_first_run:
+                        for file in new_files:
+                            self.last_posted.add(file["link"])
+                        self.seen_topics.add(topic)
+                        continue
 
-                    logging.info(
-                        f"New torrent files: "
-                        f"{len(new_files)}"
-                    )
+                    logging.info(f"Topic: {torrent['title']}")
+                    logging.info(f"New torrent files: {len(new_files)}")
 
                     for file in new_files:
                         success = await self.send_torrent(file)
 
                         if success:
-                            self.last_posted.add(
-                                file["link"]
-                            )
-
+                            self.last_posted.add(file["link"])
                             await asyncio.sleep(3)
 
                     self.seen_topics.add(topic)
 
+                if is_first_run:
+                    logging.info("Initial cache complete. The bot will now only post newly added torrents.")
+                    is_first_run = False  # Turn off the flag so future loops send messages normally
+
             except Exception as error:
-                logging.error(
-                    f"Error in auto_post_torrents: "
-                    f"{error}"
-                )
+                logging.error(f"Error in auto_post_torrents: {error}")
 
-            logging.info(
-                "Tasks completed. Sleeping while waiting for new torrents..."
-            )
-
+            logging.info("Tasks completed. Sleeping while waiting for new torrents...")
             await asyncio.sleep(CHECK_INTERVAL)
 
     async def start(self):
