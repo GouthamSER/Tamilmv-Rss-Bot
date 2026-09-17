@@ -15,7 +15,7 @@ class INLINE:
     START_BTN = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(TEXT.DEVELOPER, url="https://t.me/mn_movies_bot"),
+                InlineKeyboardButton(TEXT.DEVELOPER, url="https://t.me/im_goutham_josh"),
             ],
             [
                 InlineKeyboardButton(
@@ -25,7 +25,7 @@ class INLINE:
             [
                 InlineKeyboardButton(
                     TEXT.SOURCE_CODE,
-                    url="https://github.com/MN-bots/Tamil-Blasters-Rss-Bot",
+                    url="https://github.com/GouthamSER/Tamilmv-Rss-Bot",
                 ),
             ],
         ]
