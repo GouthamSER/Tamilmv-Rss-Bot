@@ -265,9 +265,9 @@ class MN_Bot(Client):
 
             file_bytes = io.BytesIO(response.content)
 
-            filename = (
+            # Clean title for filename formatting
+            clean_title = (
                 file["title"]
-                .replace(" ", "_")
                 .replace("/", "_")
                 .replace("\\", "_")
                 .replace(":", "_")
@@ -277,15 +277,16 @@ class MN_Bot(Client):
                 .replace("<", "_")
                 .replace(">", "_")
                 .replace("|", "_")
-                + ".torrent"
             )
-
+            
+            # Formatting filename exactly like the reference image
+            filename = f"RSS_@kutturss_bot{clean_title.replace(' ', '_')}.torrent"
             file_bytes.name = filename
 
+            # Formatting caption exactly like the reference image
             caption = (
-                f"{file['title']}\n"
-                f"📦 {file['size']}\n"
-                f"#tbl #torrent"
+                f"@RSS-KUTTU - {file['title']}\n\n"
+                f"> **Join For Latest Update @tamilmvkuttu**"
             )
 
             if (
@@ -338,6 +339,9 @@ class MN_Bot(Client):
         while True:
             try:
                 torrents = crawl_tbl()
+                
+                # Reversing the list posts the newest torrents LAST so they appear at the bottom of the Telegram channel.
+                torrents.reverse()
 
                 for torrent in torrents:
                     topic = torrent["topic_url"]
@@ -383,7 +387,7 @@ class MN_Bot(Client):
                 )
 
             logging.info(
-                "Next 1TamilMV check in 15 minutes..."
+                "Tasks completed. Sleeping while waiting for new torrents..."
             )
 
             await asyncio.sleep(CHECK_INTERVAL)
