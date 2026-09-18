@@ -2,7 +2,7 @@ from pyrogram import Client as MN_Bot
 from pyrogram import filters
 from pyrogram.types import Message
 from pyrogram.errors import FloodWait
-from mntg import TEXT, INLINE
+from imgj import TEXT, INLINE
 import asyncio
 
 
