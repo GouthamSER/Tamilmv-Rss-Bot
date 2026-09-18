@@ -1,5 +1,5 @@
 aiohttp[speedups]
-wzgram[fast]
+pyrotgfork
 python-dotenv
 TgCrypto
 feedparser
