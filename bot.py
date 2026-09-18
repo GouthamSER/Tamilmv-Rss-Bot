@@ -11,7 +11,8 @@ from flask import Flask
 from bs4 import BeautifulSoup
 import cloudscraper
 from pyrogram import Client, utils as pyroutils
-from config import BOT, API, OWNER, CHANNEL
+from pyrogram.enums import ParseMode
+from config import BOT, API, OWNER, CHANNEL, WEB
 
 pyroutils.MIN_CHAT_ID = -999999999999
 pyroutils.MIN_CHANNEL_ID = -10099999999999
@@ -26,12 +27,12 @@ def home():
     return "Bot is running!"
 
 def run_flask():
-    app.run(host="0.0.0.0", port=8000, threaded=True)
+    app.run(host="0.0.0.0", port=WEB.PORT, threaded=True)
 
 BASE_URL = "https://www.1tamilmv.rocks"
 FORUM_URL = "https://www.1tamilmv.rocks/index.php?/forums/topic/"
 MAX_TOPICS = 15
-CHECK_INTERVAL = 900
+CHECK_INTERVAL = 300
 
 THUMB_URL = "https://i.ibb.co/bMs3ZWZh/IMG-20260910-232319-421.jpg"
 THUMB_PATH = "/tmp/tbl_thumb.jpg"
@@ -156,9 +157,12 @@ def crawl_tbl():
                         strip=True
                     )
 
-                    title = raw_text.replace(
-                        "www.1TamilBlasters.red - ",
-                        ""
+                    title = raw_text
+                    title = re.sub(
+                        r"^www\.\S+\s*-\s*",
+                        "",
+                        title,
+                        flags=re.IGNORECASE
                     ).strip()
 
                     if title.lower().endswith(".torrent"):
@@ -265,29 +269,19 @@ class MN_Bot(Client):
 
             file_bytes = io.BytesIO(response.content)
 
-            # Clean title for filename formatting
-            clean_title = (
-                file["title"]
-                .replace("/", "_")
-                .replace("\\", "_")
-                .replace(":", "_")
-                .replace("*", "_")
-                .replace("?", "_")
-                .replace('"', "_")
-                .replace("<", "_")
-                .replace(">", "_")
-                .replace("|", "_")
-            )
-            
-            # Reverted to standard filename structure
+            # Clean title: strip site-name prefix, illegal filename chars
+            clean_title = re.sub(r"^www\.\S+\s*-\s*", "", file["title"], flags=re.IGNORECASE).strip()
+            clean_title = re.sub(r'[\\/:*?"<>|]', "_", clean_title)
+            clean_title = re.sub(r"\s+", " ", clean_title).strip()
+
             filename = f"{clean_title.replace(' ', '_')}.torrent"
             file_bytes.name = filename
 
-            # Reverted to standard caption
             caption = (
-                f"{file['title']}\n"
-                f"📦 {file['size']}\n"
-                f"#tbl #torrent"
+                f"🎬 <b>{clean_title}</b>\n\n"
+                f"📦 <b>Size:</b> {file['size']}\n"
+                f"📁 <b>Type:</b> Torrent File\n\n"
+                f"#TBL #Torrent"
             )
 
             if (
@@ -304,7 +298,8 @@ class MN_Bot(Client):
                     file_bytes,
                     file_name=filename,
                     thumb=self.thumbnail_path,
-                    caption=caption
+                    caption=caption,
+                    parse_mode=ParseMode.HTML
                 )
             else:
                 logging.warning(
@@ -316,7 +311,8 @@ class MN_Bot(Client):
                     self.channel_id,
                     file_bytes,
                     file_name=filename,
-                    caption=caption
+                    caption=caption,
+                    parse_mode=ParseMode.HTML
                 )
 
             logging.info(
@@ -408,7 +404,7 @@ class MN_Bot(Client):
                     f"✅ BOT STARTED\n\n"
                     f"📡 Source: 1TamilMV\n"
                     f"🔗 Forum: {FORUM_URL}\n"
-                    f"⏱ Check: Every 15 minutes\n"
+                    f"⏱ Check: Every {CHECK_INTERVAL // 60} minutes\n"
                     f"🖼 Thumbnail: "
                     f"{'Enabled' if self.thumbnail_path else 'Disabled'}"
                 )

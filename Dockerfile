@@ -17,8 +17,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy the rest of your application code into the container
 COPY . .
 
-# Expose the port Flask runs on (default is 5000)
-EXPOSE 5000
+# Expose the port Flask runs on (default is 8000, overridden by $PORT)
+EXPOSE 8000
 
 # Command to run your bot script
 CMD ["python3", "bot.py"]

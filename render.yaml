@@ -6,7 +6,7 @@ services:
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python bot.py"
     envVars:
-      - key: BOT_TOKEN
+      - key: TOKEN
         value: "<your-bot-token>"
       - key: API_ID
         value: "<your-api-id>"
@@ -14,5 +14,5 @@ services:
         value: "<your-api-hash>"
       - key: OWNER
         value: "<your-owner-id>"
-      - key: CHANNEL
+      - key: CHANNEL_ID
         value: "<your-channel-id>"
