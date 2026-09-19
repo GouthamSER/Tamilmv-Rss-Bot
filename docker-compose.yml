@@ -1,0 +1,9 @@
+services:
+  tamilmv-bot:
+    build: .
+    container_name: tamilmv-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "5000:5000"

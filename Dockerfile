@@ -4,6 +4,10 @@ FROM python:3.10-slim
 # Set the working directory inside the container
 WORKDIR /app
 
+# Ensure Python output and logs are sent straight to terminal/docker logs without buffering
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
 # Install system dependencies (optional, safe defaults)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \

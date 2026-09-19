@@ -1,95 +1,170 @@
+<h1 align="center">🎬 TamilMV RSS Telegram Bot</h1>
+
+<p align="center">
+  <b>An automated, high-performance Telegram bot that scrapes the latest torrent releases from 1TamilMV and posts them directly to your Telegram channel with thumbnails and metadata.</b>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-blue.svg?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/Pyrogram-Fork-green.svg?style=for-the-badge&logo=telegram&logoColor=white" alt="Pyrogram">
+  <img src="https://img.shields.io/badge/Docker-Ready-2496ED.svg?style=for-the-badge&logo=docker&logoColor=white" alt="Docker">
+  <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License">
+</p>
 
 ---
 
-# **MN-Bot**
+## ✨ Features
 
-**MN-Bot** is an advanced Telegram bot designed to automatically post torrent files from [1TamilBlasters](https://www.1tamilblasters.gold) to a specified Telegram channel. The bot performs periodic checks to ensure the latest torrents are fetched and posted seamlessly.
-
----
-
-## **Features**
-
-- 🚀 **Automatic Torrent Fetching**: Scrapes torrent files from 1TamilBlasters and posts them to a Telegram channel.
-- 🛠️ **Flask Health Check**: Includes a lightweight Flask server to monitor the bot's health.
-- 🔄 **Threaded Flask Server**: Ensures the Flask server runs in a separate thread, preventing any interference with the bot’s core functionality.
-- ☁️ **Cloud Deployment Ready**: Compatible with platforms like [Koyeb](https://www.koyeb.com) and [Render](https://render.com).
+- 🚀 **Automated 1TamilMV Crawling**: Automatically checks for new forum topics and torrent files every 5 minutes.
+- ⚡ **Non-Blocking Asynchronous Engine**: Web scraping and torrent downloads run on dedicated worker threads, ensuring Telegram MTProto keepalives never freeze.
+- 🛡️ **24/7 Supervisor Recovery**: Built-in background supervisor automatically catches transient network errors and restarts scraping cycles without crashing.
+- ⏳ **Smart FloodWait Protection**: Gracefully catches Telegram rate limits and retries automatically without spamming or dropping connections.
+- 🖼️ **Thumbnail & Metadata Support**: Auto-attaches high quality cover thumbnails and formats release titles with file size and tags.
+- 🐳 **VPS & Docker Ready**: Includes `docker-compose.yml` and `Dockerfile` configured with `restart: unless-stopped` and unbuffered logging for rock-solid 24/7 uptime.
+- 🌐 **Web Health Check**: Integrated lightweight Flask server on port `5000` for platforms like Render, Koyeb, and Heroku.
 
 ---
 
-## **Requirements**
+## 📋 Environment Variables
 
-### **Python Libraries**
-Install the required libraries by running the following command:
-```bash
-pip install -r requirements.txt
-```
+Create a `.env` file in the root directory (or configure them in your hosting provider):
 
----
-
-## **Configuration**
-
-Ensure the following configurations are set in the `config.py` file:
-
-- **BOT**: The bot's token.
-- **API**: The Telegram API ID and API Hash.
-- **OWNER**: The Telegram user ID of the bot's owner.
-- **CHANNEL**: The Telegram channel ID where torrents will be posted.
+| Variable | Required | Description | Example |
+| :--- | :---: | :--- | :--- |
+| `TOKEN` | **Yes** | Telegram Bot Token from [@BotFather](https://t.me/BotFather) | `123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ` |
+| `API_ID` | **Yes** | Telegram API ID from [my.telegram.org](https://my.telegram.org) | `1234567` |
+| `API_HASH` | **Yes** | Telegram API Hash from [my.telegram.org](https://my.telegram.org) | `0123456789abcdef0123456789abcdef` |
+| `OWNER` | **Yes** | Telegram User ID of the owner (from [@userinfobot](https://t.me/userinfobot)) | `1892771262` |
+| `CHANNEL_ID` | **Yes** | Target Channel ID (bot must be admin with Post permission) | `-1002194076115` |
+| `PORT` | No | Port for Flask web server (default: `5000`) | `5000` |
 
 ---
 
-## **How to Run**
+## 🚀 Deployment & Running
 
-### **Local Environment**
+### Option 1: Docker Compose on VPS (Recommended)
 
-1. Clone the repository:
-    ```bash
-    git clone https://github.com//MN-BOTS/Tamil-Blasters-Rss-Bot.git
-    cd test
-    ```
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/GouthamSER/Tamilmv-Rss-Bot.git
+   cd Tamilmv-Rss-Bot
+   ```
 
-2. Install dependencies:
-    ```bash
-    pip install -r requirements.txt
-    ```
+2. **Configure environment variables:**
+   ```bash
+   nano .env
+   ```
+   Paste your credentials into `.env`:
+   ```env
+   TOKEN=your_bot_token
+   API_ID=your_api_id
+   API_HASH=your_api_hash
+   OWNER=your_owner_id
+   CHANNEL_ID=your_channel_id
+   ```
 
-3. Run the bot:
-    ```bash
-    python bot.py
-    ```
+3. **Start the bot in the background (24/7):**
+   ```bash
+   docker compose up -d --build
+   ```
 
-### **Deployment**
+4. **Monitor logs in real-time:**
+   ```bash
+   docker compose logs -f
+   ```
 
-#### **Koyeb**
+5. **Stop or Restart:**
+   ```bash
+   docker compose restart
+   docker compose down
+   ```
 
-1. Log in to [Koyeb](https://www.koyeb.com).
-2. Create a new service and link it to your GitHub repository.
-3. Add all required environment variables (e.g., `BOT_TOKEN`, `API_ID`, `API_HASH`, etc.) in the service configuration.
-4. Deploy the service.
+---
+
+### Option 2: Plain Docker CLI
+
+1. **Build the image:**
+   ```bash
+   docker build -t tamilmv-bot .
+   ```
+
+2. **Run the container with automatic restart:**
+   ```bash
+   docker run -d \
+     --name tamilmv-bot \
+     --restart unless-stopped \
+     --env-file .env \
+     -p 5000:5000 \
+     tamilmv-bot
+   ```
+
+3. **View live logs:**
+   ```bash
+   docker logs -f tamilmv-bot
+   ```
+
+---
+
+### Option 3: Local Environment (Python)
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/GouthamSER/Tamilmv-Rss-Bot.git
+   cd Tamilmv-Rss-Bot
+   ```
+
+2. **Create a virtual environment & install requirements:**
+   ```bash
+   python -m venv venv
+   # On Linux/macOS:
+   source venv/bin/activate
+   # On Windows:
+   venv\Scripts\activate
+
+   pip install -r requirements.txt
+   ```
+
+3. **Run the bot:**
+   ```bash
+   python bot.py
+   ```
+
+---
+
+### Option 4: Cloud Platforms (Render / Koyeb)
 
 #### **Render**
+1. Fork or push this repository to GitHub.
+2. Create a new **Web Service** on [Render](https://render.com).
+3. Connect your repository.
+4. Set:
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `python bot.py`
+5. Add the required environment variables in the **Environment** tab.
 
-1. Log in to [Render](https://render.com).
-2. Create a new web service and connect it to your GitHub repository.
-3. Add the necessary environment variables like `BOT_TOKEN`, `API_ID`, `API_HASH`, etc.
-4. Set the Start Command to:
-    ```bash
-    python bot.py
-    ```
-5. Deploy the service.
-
----
-
-## **Notes**
-
-- The bot requires **valid Telegram API credentials** to function.
-- Ensure the target Telegram channel allows the bot to post messages.
-- The bot performs periodic checks every **15 minutes** to fetch and post new torrents.
+#### **Koyeb**
+1. Create a new App on [Koyeb](https://www.koyeb.com).
+2. Connect your repository and select **Dockerfile** deployment.
+3. Configure the environment variables and deploy.
 
 ---
 
-## **License**
+## 📌 Important Notes
 
-This project is licensed under the **MIT License**. Feel free to use, modify, and distribute it as per the terms of the license.
+- **Channel Permissions**: Ensure your bot is added as an **Administrator** in your target Telegram channel with permission to **Post Messages**.
+- **First Run Caching**: When the bot boots up for the first time, it records existing torrents in memory so it doesn't spam older posts. Only freshly uploaded torrents will be dispatched to your channel.
+- **Auto-Restart on VPS**: The `--restart unless-stopped` flag in Docker Compose guarantees that the bot will automatically come back online if your VPS reboots or experiences temporary disruptions.
 
 ---
 
+## 👨‍💻 Credits & Contact
+
+- **Developer**: [@im_goutham_josh](https://t.me/im_goutham_josh)
+- **Updates Channel**: [TamilMV Kuttu](https://t.me/tamilmvkuttu)
+- **Source Code**: [GitHub Repository](https://github.com/GouthamSER/Tamilmv-Rss-Bot)
+
+---
+
+## 📄 License
+
+This project is licensed under the **[MIT License](LICENSE)**. Feel free to modify and distribute.
