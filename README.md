@@ -81,6 +81,48 @@ Create a `.env` file in the root directory (or configure them in your hosting pr
 
 ---
 
+### 🖥️ Running with tmux + Docker (Prevents SSH Disconnects)
+
+Using `tmux` creates a persistent terminal session on your VPS so you can monitor live logs 24/7 without worrying about SSH terminal disconnects:
+
+1. **Install tmux on your VPS:**
+   ```bash
+   apt update && apt install -y tmux
+   ```
+
+2. **Create a new session:**
+   ```bash
+   tmux new -s bot
+   ```
+
+3. **Start the bot & monitor logs:**
+   ```bash
+   cd Tamilmv-Rss-Bot
+   docker compose up -d --build
+   docker compose logs -f
+   ```
+
+4. **Detach from tmux (safe to close SSH):**
+   - Press `Ctrl + B`, release, then press `D`.
+
+5. **Reattach to check logs anytime:**
+   ```bash
+   tmux attach -t bot
+   ```
+
+#### 💡 tmux Cheat Sheet
+
+| Action | Command / Shortcut |
+| :--- | :--- |
+| **New Session** | `tmux new -s bot` |
+| **Detach (Keep running)** | `Ctrl + B` then `D` |
+| **Reattach (Resume session)**| `tmux attach -t bot` |
+| **List Sessions** | `tmux ls` |
+| **Kill Session** | `tmux kill-session -t bot` |
+| **Scroll Logs** | `Ctrl + B` then `[` (arrow keys to scroll, `q` to exit) |
+
+---
+
 ### Option 2: Plain Docker CLI
 
 1. **Build the image:**
@@ -157,9 +199,16 @@ Create a `.env` file in the root directory (or configure them in your hosting pr
 
 ---
 
+## 👥 Contributors
+
+- **[MNTGXO](https://github.com/MNTGXO)** — Original code & contributor
+
+---
+
 ## 👨‍💻 Credits & Contact
 
-- **Developer**: [@im_goutham_josh](https://t.me/im_goutham_josh)
+- **Developer & Support**: [@im_goutham_josh](https://t.me/im_goutham_josh)
+- **Contributor & Inspiration**: [MNTGXO](https://github.com/MNTGXO)
 - **Updates Channel**: [TamilMV Kuttu](https://t.me/tamilmvkuttu)
 - **Source Code**: [GitHub Repository](https://github.com/GouthamSER/Tamilmv-Rss-Bot)
 

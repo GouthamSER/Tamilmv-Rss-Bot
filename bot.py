@@ -217,7 +217,7 @@ class MN_Bot(Client):
 
     def __init__(self):
         super().__init__(
-            "MN-Bot",
+            "Rss-Bot",
             api_id=API.ID,
             api_hash=API.HASH,
             bot_token=BOT.TOKEN,
@@ -467,7 +467,7 @@ class MN_Bot(Client):
 
     async def stop(self, *args):
         logging.info(
-            "Stopping MN-Bot..."
+            "Stopping Rss-Bot..."
         )
 
         if self._crawl_task and not self._crawl_task.done():
@@ -480,7 +480,7 @@ class MN_Bot(Client):
         await super().stop()
 
         logging.info(
-            "MN-Bot stopped."
+            "Rss-Bot stopped."
         )
 
 if __name__ == "__main__":
