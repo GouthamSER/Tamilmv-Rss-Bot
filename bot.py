@@ -5,7 +5,7 @@ import os
 import re
 import tempfile
 import threading
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from flask import Flask
@@ -20,7 +20,7 @@ except ImportError:
 from pyrogram import Client, utils as pyroutils
 from pyrogram.enums import ParseMode
 from pyrogram.errors import FloodWait
-from config import BOT, API, OWNER, CHANNEL, WEB
+from config import BOT, API, OWNER, CHANNEL, WEB, NETWORK
 
 pyroutils.MIN_CHAT_ID = -999999999999
 pyroutils.MIN_CHANNEL_ID = -10099999999999
@@ -37,8 +37,14 @@ def home():
 def run_flask():
     app.run(host="0.0.0.0", port=WEB.PORT, threaded=True)
 
-BASE_URL = "https://www.1tamilmv.rocks"
-FORUM_URL = "https://www.1tamilmv.rocks/index.php?/forums/topic/"
+GATEWAY_DOMAINS = [
+    "https://www.1tamilmv.fi",
+    "https://1tamilmv.fi",
+    "https://www.1tamilmv.rocks",
+]
+
+BASE_URL = NETWORK.BASE_URL.rstrip("/") if NETWORK.BASE_URL else "https://www.1tamilmv.rocks"
+FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
 MAX_TOPICS = 15
 CHECK_INTERVAL = 300
 
@@ -54,19 +60,87 @@ DEFAULT_HEADERS = {
 def create_scraper():
     if HAS_CLOUDSCRAPER:
         try:
-            return cloudscraper.create_scraper(
+            s = cloudscraper.create_scraper(
                 browser={
                     "browser": "chrome",
                     "platform": "windows",
                     "mobile": False
                 }
             )
+            if NETWORK.PROXY:
+                s.proxies = {
+                    "http": NETWORK.PROXY,
+                    "https": NETWORK.PROXY
+                }
+            return s
         except Exception:
             pass
 
     session = requests.Session()
     session.headers.update(DEFAULT_HEADERS)
+    if NETWORK.PROXY:
+        session.proxies = {
+            "http": NETWORK.PROXY,
+            "https": NETWORK.PROXY
+        }
     return session
+
+def discover_active_domain():
+    """
+    Checks gateway domains (e.g. WWW.1TAMILMV.FI) and follows redirects or reads
+    the official announcement banner to automatically discover the current active domain.
+    """
+    global BASE_URL, FORUM_URL
+
+    if NETWORK.BASE_URL:
+        BASE_URL = NETWORK.BASE_URL.rstrip("/")
+        FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
+        return BASE_URL
+
+    scraper = create_scraper()
+
+    # 1. Test permanent redirect gateway (WWW.1TAMILMV.FI)
+    for gateway in ["https://www.1tamilmv.fi", "https://1tamilmv.fi"]:
+        try:
+            r = scraper.get(gateway, timeout=8, allow_redirects=False)
+            if r.status_code in (301, 302, 307, 308) and r.headers.get("Location"):
+                target = r.headers["Location"]
+                parsed = urlparse(target)
+                final_domain = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+                if "tamilmv" in final_domain.lower():
+                    logging.info(f"Gateway {gateway} redirected to active domain: {final_domain}")
+                    BASE_URL = final_domain
+                    FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
+                    return BASE_URL
+        except Exception as e:
+            logging.debug(f"Gateway check failed for {gateway}: {e}")
+
+    # 2. Check current known domains and check official announcement banner
+    for dom in GATEWAY_DOMAINS:
+        try:
+            r = scraper.get(dom, timeout=10, allow_redirects=True)
+            if r.status_code == 200:
+                banner_match = re.search(
+                    r"official\s+website\s+(WWW\.[A-Z0-9.-]+)",
+                    r.text,
+                    re.IGNORECASE
+                )
+                if banner_match:
+                    official = f"https://{banner_match.group(1).lower()}".rstrip("/")
+                    logging.info(f"Official domain discovered from site banner: {official}")
+                    BASE_URL = official
+                    FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
+                    return BASE_URL
+
+                parsed = urlparse(r.url)
+                base = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+                BASE_URL = base
+                FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
+                return BASE_URL
+        except Exception as e:
+            logging.debug(f"Known domain check failed for {dom}: {e}")
+
+    return BASE_URL
 
 def download_thumbnail():
     try:
@@ -134,16 +208,30 @@ def crawl_tbl():
     scraper = create_scraper()
 
     try:
+        # Automatically discover or verify active domain from gateway
+        discover_active_domain()
+
         logging.info("========================================")
         logging.info("Checking 1TamilMV...")
+        logging.info(f"Active Base URL: {BASE_URL}")
         logging.info(f"Forum URL: {FORUM_URL}")
 
-        response = scraper.get(
-            FORUM_URL,
-            timeout=20,
-            headers={"Referer": BASE_URL}
-        )
-        response.raise_for_status()
+        try:
+            response = scraper.get(
+                FORUM_URL,
+                timeout=20,
+                headers={"Referer": BASE_URL}
+            )
+            response.raise_for_status()
+        except Exception as conn_err:
+            logging.warning(f"Connection to {FORUM_URL} failed ({conn_err}). Attempting to rediscover active domain...")
+            discover_active_domain()
+            response = scraper.get(
+                FORUM_URL,
+                timeout=20,
+                headers={"Referer": BASE_URL}
+            )
+            response.raise_for_status()
 
         soup = BeautifulSoup(response.text, "html.parser")
         topic_links = []

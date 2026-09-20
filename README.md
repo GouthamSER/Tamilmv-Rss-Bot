@@ -38,6 +38,8 @@ Create a `.env` file in the root directory (or configure them in your hosting pr
 | `OWNER` | **Yes** | Telegram User ID of the owner (from [@userinfobot](https://t.me/userinfobot)) | `1892771262` |
 | `CHANNEL_ID` | **Yes** | Target Channel ID (bot must be admin with Post permission) | `-1002194076115` |
 | `PORT` | No | Port for Flask web server (default: `5000`) | `5000` |
+| `PROXY` | No | Optional HTTP/HTTPS or SOCKS5 proxy to bypass ISP domain blocks | `http://127.0.0.1:8080` or `socks5://127.0.0.1:1080` |
+| `BASE_URL` | No | Override starting base URL (defaults to auto-resolving from `WWW.1TAMILMV.FI`) | `https://www.1tamilmv.rocks` |
 
 ---
 

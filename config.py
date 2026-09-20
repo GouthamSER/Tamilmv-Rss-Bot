@@ -40,3 +40,12 @@ class WEB:
     PORT: Specific port no. on which you want to run your bot, DON'T TOUCH IT IF YOU DON'T KNOW WHAT IS IT.
     """
     PORT = int(os.environ.get("PORT", 5000))
+
+
+class NETWORK:
+    """
+    PROXY: Optional HTTP/HTTPS or SOCKS5 proxy to bypass ISP blocks (e.g. 'http://127.0.0.1:8080' or 'socks5://127.0.0.1:1080')
+    BASE_URL: Custom base URL override (optional, defaults to auto-resolving from WWW.1TAMILMV.FI)
+    """
+    PROXY = os.environ.get("PROXY", "")
+    BASE_URL = os.environ.get("BASE_URL", "")
