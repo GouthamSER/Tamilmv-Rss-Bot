@@ -35,7 +35,7 @@ FORUM_URL = "https://www.1tamilmv.rocks/index.php?/forums/topic/"
 MAX_TOPICS = 15
 CHECK_INTERVAL = 300
 
-THUMB_URL = "https://i.ibb.co/bMs3ZWZh/IMG-20260910-232319-421.jpg"
+THUMB_URL = "https://i.ibb.co/DPrwsGsC/IMG-20260919-174828-023.jpg"
 THUMB_PATH = "/tmp/tbl_thumb.jpg"
 
 def download_thumbnail():
