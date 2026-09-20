@@ -15,11 +15,12 @@
 
 ## ✨ Features
 
-- 🚀 **Automated 1TamilMV Crawling**: Automatically checks for new forum topics and torrent files every 5 minutes.
-- ⚡ **Non-Blocking Asynchronous Engine**: Web scraping and torrent downloads run on dedicated worker threads, ensuring Telegram MTProto keepalives never freeze.
+- 🚀 **Automated 1TamilMV Crawling**: Automatically checks for new forum topics, direct download links, and torrent files every 5 minutes.
+- 🖼️ **Movie Poster & Direct Link Posts**: Fetches movie poster images and direct download links (e.g. Cyberloom), posting clean summary photo messages before sending torrent files.
+- 📁 **Torrent File Delivery**: Downloads and sends `.torrent` files directly to your channel with custom thumbnails, release metadata, and file sizes.
+- ⚡ **Non-Blocking Asynchronous Engine**: Web scraping and file downloads run on dedicated worker threads, ensuring Telegram MTProto keepalives never freeze.
 - 🛡️ **24/7 Supervisor Recovery**: Built-in background supervisor automatically catches transient network errors and restarts scraping cycles without crashing.
 - ⏳ **Smart FloodWait Protection**: Gracefully catches Telegram rate limits and retries automatically without spamming or dropping connections.
-- 🖼️ **Thumbnail & Metadata Support**: Auto-attaches high quality cover thumbnails and formats release titles with file size and tags.
 - 🐳 **VPS & Docker Ready**: Includes `docker-compose.yml` and `Dockerfile` configured with `restart: unless-stopped` and unbuffered logging for rock-solid 24/7 uptime.
 - 🌐 **Web Health Check**: Integrated lightweight Flask server on port `5000` for platforms like Render, Koyeb, and Heroku.
 
