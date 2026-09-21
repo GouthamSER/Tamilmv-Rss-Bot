@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY . .
 
 # Expose the port Flask runs on (default is 8000, overridden by $PORT)
-EXPOSE 5000
+EXPOSE 5090
 
 # Command to run your bot script
 CMD ["python3", "bot.py"]
