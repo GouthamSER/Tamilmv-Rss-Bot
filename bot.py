@@ -1,6 +1,5 @@
 import asyncio
 import io
-import json
 import logging
 import os
 import re
@@ -41,7 +40,7 @@ def run_flask():
 GATEWAY_DOMAINS = [
     "https://www.1tamilmv.fi",
     "https://1tamilmv.fi",
-    "https://www.1tamilmv.lease",
+    "https://www.1tamilmv.rocks",
 ]
 
 BASE_URL = NETWORK.BASE_URL.rstrip("/") if NETWORK.BASE_URL else "https://www.1tamilmv.rocks"
@@ -51,32 +50,6 @@ CHECK_INTERVAL = 480
 
 THUMB_URL = "https://i.ibb.co/DPrwsGsC/IMG-20260919-174828-023.jpg"
 THUMB_PATH = os.path.join(tempfile.gettempdir(), "tbl_thumb.jpg")
-
-# Posted-state persisted to disk. Old code kept last_posted/seen_topics only in
-# RAM, so every restart wiped them -> bot lost track of what it already sent.
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "posted_state.json")
-
-def load_state():
-    try:
-        if os.path.exists(STATE_FILE):
-            with open(STATE_FILE, "r") as f:
-                data = json.load(f)
-            return set(data.get("last_posted", [])), set(data.get("seen_topics", []))
-    except Exception as e:
-        logging.error(f"Failed to load posted state: {e}")
-    return set(), set()
-
-def save_state(last_posted, seen_topics):
-    try:
-        tmp_path = STATE_FILE + ".tmp"
-        with open(tmp_path, "w") as f:
-            json.dump({
-                "last_posted": list(last_posted),
-                "seen_topics": list(seen_topics)
-            }, f)
-        os.replace(tmp_path, STATE_FILE)
-    except Exception as e:
-        logging.error(f"Failed to save posted state: {e}")
 
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -404,10 +377,8 @@ class MN_Bot(Client):
         )
 
         self.channel_id = CHANNEL.ID
-        # Real first run = no state file on disk yet. A restart with a state
-        # file already there must NOT be treated as first run again.
-        self._state_existed = os.path.exists(STATE_FILE)
-        self.last_posted, self.seen_topics = load_state()
+        self.last_posted = set()
+        self.seen_topics = set()
         self.thumbnail_path = None
         self._crawl_task = None
 
@@ -667,9 +638,7 @@ class MN_Bot(Client):
 
     async def auto_post_torrents(self):
         logging.info("Automatic 1TamilMV posting started.")
-        # Only silently cache on a genuine first-ever run (no state file).
-        # After a restart with existing state, don't wipe/re-swallow it.
-        is_first_run = not self._state_existed
+        is_first_run = True  # Flag to track bot startup
 
         while True:
             try:
@@ -696,7 +665,7 @@ class MN_Bot(Client):
                             or (rel.get("direct_link") and rel["direct_link"] not in self.last_posted)
                         ]
 
-                        # Genuine first-ever run (no state file yet): cache everything silently
+                        # If this is the bot's first run after restart, cache everything silently
                         if is_first_run:
                             self.seen_topics.add(topic_url)
                             for rel in releases:
@@ -704,7 +673,6 @@ class MN_Bot(Client):
                                     self.last_posted.add(rel["torrent_link"])
                                 if rel.get("direct_link"):
                                     self.last_posted.add(rel["direct_link"])
-                            save_state(self.last_posted, self.seen_topics)
                             continue
 
                         # If topic already seen and no new releases, skip
@@ -714,75 +682,41 @@ class MN_Bot(Client):
                         logging.info(f"Topic: {topic_data.get('title', 'Unknown')}")
                         logging.info(f"New releases to post: {len(new_releases)}")
 
-                        # 1. Send the .torrent file documents FIRST.
-                        # If a release's torrent_link was already posted before
-                        # (e.g. bot just restarted, or the site added the direct
-                        # link a check-cycle later), do NOT resend the file —
-                        # that was the "same torrent sent 2 times" bug. Only a
-                        # release whose torrent itself was never sent gets sent.
+                        # 1. Send the Poster + Direct Links summary post FIRST
+                        topic_to_post = dict(topic_data)
+                        if topic_url in self.seen_topics:
+                            topic_to_post["releases"] = new_releases
+
+                        summary_posted = await self.send_summary_post(topic_to_post)
+                        if summary_posted:
+                            await asyncio.sleep(2)
+
+                        # 2. Send the individual .torrent file documents
                         releases_to_send = (
                             new_releases if topic_url in self.seen_topics else releases
                         )
-                        newly_found_direct_links = []
                         for rel in releases_to_send:
-                            torrent_link = rel.get("torrent_link")
-                            direct_link = rel.get("direct_link")
-
-                            if torrent_link and torrent_link in self.last_posted:
-                                # Torrent already sent earlier. Direct link showed
-                                # up later — no problem, just note it for the
-                                # summary post below, don't resend the file.
-                                if direct_link and direct_link not in self.last_posted:
-                                    self.last_posted.add(direct_link)
-                                    newly_found_direct_links.append(rel)
-                                continue
-
-                            if torrent_link:
+                            if rel.get("torrent_link"):
                                 file_info = {
                                     "title": rel["title"],
-                                    "link": torrent_link,
+                                    "link": rel["torrent_link"],
                                     "size": rel.get("size", "Unknown")
                                 }
                                 success = await self.send_torrent(file_info)
                                 if success:
-                                    self.last_posted.add(torrent_link)
-                                    if direct_link:
-                                        self.last_posted.add(direct_link)
-                                    save_state(self.last_posted, self.seen_topics)
+                                    self.last_posted.add(rel["torrent_link"])
+                                    if rel.get("direct_link"):
+                                        self.last_posted.add(rel["direct_link"])
                                     await asyncio.sleep(3)
-                                # If it failed, don't mark it posted — next check
-                                # (8 min later) will retry it, that's correct.
                             else:
-                                if direct_link and direct_link not in self.last_posted:
-                                    self.last_posted.add(direct_link)
-                                    newly_found_direct_links.append(rel)
-
-                        # 2. Send/refresh the Poster + Direct Links summary post,
-                        # covering both brand-new releases and releases whose
-                        # direct link only just became available.
-                        summary_releases = new_releases if topic_url in self.seen_topics else releases
-                        # dedupe, keep order
-                        seen_ids = set(id(r) for r in summary_releases)
-                        for r in newly_found_direct_links:
-                            if id(r) not in seen_ids:
-                                summary_releases.append(r)
-                                seen_ids.add(id(r))
-
-                        if summary_releases:
-                            topic_to_post = dict(topic_data)
-                            topic_to_post["releases"] = summary_releases
-                            summary_posted = await self.send_summary_post(topic_to_post)
-                            if summary_posted:
-                                await asyncio.sleep(2)
+                                if rel.get("direct_link"):
+                                    self.last_posted.add(rel["direct_link"])
 
                         self.seen_topics.add(topic_url)
-                        save_state(self.last_posted, self.seen_topics)
 
                     if is_first_run:
                         logging.info("Initial cache complete. The bot will now only post newly added torrents.")
                         is_first_run = False
-                        self._state_existed = True
-                        save_state(self.last_posted, self.seen_topics)
 
             except asyncio.CancelledError:
                 raise
