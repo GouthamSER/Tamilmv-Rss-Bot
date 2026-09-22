@@ -418,8 +418,8 @@ class MN_Bot(Client):
 
             blocks = []
             for rel in releases:
-                title = rel.get("title", "").strip()
-                direct_link = rel.get("direct_link", "").strip()
+                title = (rel.get("title") or "").strip()
+                direct_link = (rel.get("direct_link") or "").strip()
                 if direct_link:
                     blocks.append(f"🎬 - {title}\n🔗 Direct Link: {direct_link}")
                 else:
