@@ -46,7 +46,7 @@ GATEWAY_DOMAINS = [
 BASE_URL = NETWORK.BASE_URL.rstrip("/") if NETWORK.BASE_URL else "https://www.1tamilmv.rocks"
 FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
 MAX_TOPICS = 15
-CHECK_INTERVAL = 300
+CHECK_INTERVAL = 480
 
 THUMB_URL = "https://i.ibb.co/DPrwsGsC/IMG-20260919-174828-023.jpg"
 THUMB_PATH = os.path.join(tempfile.gettempdir(), "tbl_thumb.jpg")
