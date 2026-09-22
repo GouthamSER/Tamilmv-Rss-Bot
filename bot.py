@@ -40,7 +40,7 @@ def run_flask():
 GATEWAY_DOMAINS = [
     "https://www.1tamilmv.fi",
     "https://1tamilmv.fi",
-    "https://www.1tamilmv.rocks",
+    "https://www.1tamilmv.lease",
 ]
 
 BASE_URL = NETWORK.BASE_URL.rstrip("/") if NETWORK.BASE_URL else "https://www.1tamilmv.rocks"
