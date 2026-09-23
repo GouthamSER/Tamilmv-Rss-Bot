@@ -658,21 +658,34 @@ class MN_Bot(Client):
                         topic_url = topic_data["topic_url"]
                         releases = topic_data.get("releases", [])
 
+                        def _rel_links(rel):
+                            return [
+                                l for l in (
+                                    rel.get("torrent_link"),
+                                    rel.get("direct_link"),
+                                    rel.get("magnet"),
+                                )
+                                if l
+                            ]
+
+                        # A release counts as "new" only if it has at least one
+                        # link we haven't posted before. This also treats a
+                        # release whose torrent was already sent but which just
+                        # got a direct link added later (site owners upload the
+                        # torrent first, direct link follows) as "has an update"
+                        # -- WITHOUT re-sending the torrent document itself.
                         new_releases = [
                             rel
                             for rel in releases
-                            if (rel.get("torrent_link") and rel["torrent_link"] not in self.last_posted)
-                            or (rel.get("direct_link") and rel["direct_link"] not in self.last_posted)
+                            if any(link not in self.last_posted for link in _rel_links(rel))
                         ]
 
                         # If this is the bot's first run after restart, cache everything silently
                         if is_first_run:
                             self.seen_topics.add(topic_url)
                             for rel in releases:
-                                if rel.get("torrent_link"):
-                                    self.last_posted.add(rel["torrent_link"])
-                                if rel.get("direct_link"):
-                                    self.last_posted.add(rel["direct_link"])
+                                for link in _rel_links(rel):
+                                    self.last_posted.add(link)
                             continue
 
                         # If topic already seen and no new releases, skip
@@ -696,21 +709,36 @@ class MN_Bot(Client):
                             new_releases if topic_url in self.seen_topics else releases
                         )
                         for rel in releases_to_send:
-                            if rel.get("torrent_link"):
+                            torrent_link = rel.get("torrent_link")
+                            direct_link = rel.get("direct_link")
+                            magnet = rel.get("magnet")
+
+                            # Only download/send the .torrent file if it hasn't
+                            # been posted already -- this is what stops the bot
+                            # from re-sending the same torrent document just
+                            # because a direct link (or magnet) was added to the
+                            # release afterwards.
+                            if torrent_link and torrent_link not in self.last_posted:
                                 file_info = {
                                     "title": rel["title"],
-                                    "link": rel["torrent_link"],
+                                    "link": torrent_link,
                                     "size": rel.get("size", "Unknown")
                                 }
                                 success = await self.send_torrent(file_info)
                                 if success:
-                                    self.last_posted.add(rel["torrent_link"])
-                                    if rel.get("direct_link"):
-                                        self.last_posted.add(rel["direct_link"])
+                                    self.last_posted.add(torrent_link)
                                     await asyncio.sleep(3)
-                            else:
-                                if rel.get("direct_link"):
-                                    self.last_posted.add(rel["direct_link"])
+
+                            # The direct link / magnet are only ever announced
+                            # via the summary post above, never as a separate
+                            # document -- so mark them posted regardless of
+                            # whether a torrent document was (re)sent this
+                            # round, otherwise they'd be treated as "new" again
+                            # on every future check.
+                            if direct_link:
+                                self.last_posted.add(direct_link)
+                            if magnet:
+                                self.last_posted.add(magnet)
 
                         self.seen_topics.add(topic_url)
 
