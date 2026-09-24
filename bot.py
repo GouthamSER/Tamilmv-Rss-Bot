@@ -316,11 +316,14 @@ def crawl_tbl():
                         }
                         releases.append(current_rel)
                     elif current_rel:
-                        if (
+                        href_lower = href.lower()
+                        classes = [c.lower() for c in a.get("class", [])]
+                        is_direct_candidate = (
                             "DIRECT" in raw_text.upper()
-                            or "cyberloom" in href
-                            or "download-button" in a.get("class", [])
-                        ):
+                            or "cyberloom" in href_lower
+                            or any("download" in c for c in classes)
+                        )
+                        if is_direct_candidate:
                             if href.startswith("http") and not current_rel["direct_link"]:
                                 current_rel["direct_link"] = href
                         elif href.startswith("magnet:"):
