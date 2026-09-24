@@ -46,7 +46,7 @@ GATEWAY_DOMAINS = [
 BASE_URL = NETWORK.BASE_URL.rstrip("/") if NETWORK.BASE_URL else "https://www.1tamilmv.rocks"
 FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
 MAX_TOPICS = 15
-CHECK_INTERVAL = 480
+CHECK_INTERVAL = 360
 
 THUMB_URL = "https://i.ibb.co/DPrwsGsC/IMG-20260919-174828-023.jpg"
 THUMB_PATH = os.path.join(tempfile.gettempdir(), "tbl_thumb.jpg")
@@ -695,19 +695,11 @@ class MN_Bot(Client):
                         logging.info(f"Topic: {topic_data.get('title', 'Unknown')}")
                         logging.info(f"New releases to post: {len(new_releases)}")
 
-                        # 1. Send the Poster + Direct Links summary post FIRST
-                        topic_to_post = dict(topic_data)
-                        if topic_url in self.seen_topics:
-                            topic_to_post["releases"] = new_releases
-
-                        summary_posted = await self.send_summary_post(topic_to_post)
-                        if summary_posted:
-                            await asyncio.sleep(2)
-
-                        # 2. Send the individual .torrent file documents
                         releases_to_send = (
                             new_releases if topic_url in self.seen_topics else releases
                         )
+
+                        # 1. Send the individual .torrent file documents FIRST
                         for rel in releases_to_send:
                             torrent_link = rel.get("torrent_link")
                             direct_link = rel.get("direct_link")
@@ -730,7 +722,7 @@ class MN_Bot(Client):
                                     await asyncio.sleep(3)
 
                             # The direct link / magnet are only ever announced
-                            # via the summary post above, never as a separate
+                            # via the summary post below, never as a separate
                             # document -- so mark them posted regardless of
                             # whether a torrent document was (re)sent this
                             # round, otherwise they'd be treated as "new" again
@@ -739,6 +731,15 @@ class MN_Bot(Client):
                                 self.last_posted.add(direct_link)
                             if magnet:
                                 self.last_posted.add(magnet)
+
+                        # 2. Send the Poster + Caption + Direct Link summary post AFTER torrent
+                        topic_to_post = dict(topic_data)
+                        if topic_url in self.seen_topics:
+                            topic_to_post["releases"] = new_releases
+
+                        summary_posted = await self.send_summary_post(topic_to_post)
+                        if summary_posted:
+                            await asyncio.sleep(2)
 
                         self.seen_topics.add(topic_url)
 
