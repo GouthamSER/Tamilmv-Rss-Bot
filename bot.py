@@ -5,6 +5,8 @@ import os
 import re
 import tempfile
 import threading
+import json
+from html import escape
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -47,6 +49,7 @@ BASE_URL = NETWORK.BASE_URL.rstrip("/") if NETWORK.BASE_URL else "https://www.1t
 FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
 MAX_TOPICS = 13
 CHECK_INTERVAL = 600
+STATE_PATH = os.path.join(tempfile.gettempdir(), "rss_bot_state.json")
 
 THUMB_URL = "https://i.ibb.co/DPrwsGsC/IMG-20260919-174828-023.jpg"
 THUMB_PATH = os.path.join(tempfile.gettempdir(), "tbl_thumb.jpg")
@@ -73,8 +76,8 @@ def create_scraper():
                     "https": NETWORK.PROXY
                 }
             return s
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning(f"Cloudscraper initialization failed: {e}")
 
     session = requests.Session()
     session.headers.update(DEFAULT_HEADERS)
@@ -367,7 +370,7 @@ def crawl_tbl():
     return topics
 
 class MN_Bot(Client):
-    MAX_MSG_LENGTH = 4000
+    MAX_MSG_LENGTH = 3800
 
     def __init__(self):
         super().__init__(
@@ -384,6 +387,46 @@ class MN_Bot(Client):
         self.seen_topics = set()
         self.thumbnail_path = None
         self._crawl_task = None
+        self._state_lock = threading.Lock()
+        self._load_state()
+
+    def _load_state(self):
+        """Load posted-link/topic state from disk so restarts do not lose history."""
+        self.last_posted = set()
+        self.seen_topics = set()
+
+        try:
+            if not os.path.exists(STATE_PATH):
+                return
+
+            with open(STATE_PATH, "r", encoding="utf-8") as file:
+                state = json.load(file)
+
+            self.last_posted = set(state.get("last_posted", []))
+            self.seen_topics = set(state.get("seen_topics", []))
+
+            logging.info(
+                f"Loaded state: {len(self.last_posted)} posted links, "
+                f"{len(self.seen_topics)} seen topics."
+            )
+        except Exception as e:
+            logging.warning(f"Could not load persistent state: {e}")
+
+    def _save_state(self):
+        """Persist posted-link/topic state atomically."""
+        try:
+            state = {
+                "last_posted": sorted(self.last_posted),
+                "seen_topics": sorted(self.seen_topics),
+            }
+
+            temp_path = f"{STATE_PATH}.tmp"
+            with self._state_lock:
+                with open(temp_path, "w", encoding="utf-8") as file:
+                    json.dump(state, file, ensure_ascii=False, indent=2)
+                os.replace(temp_path, STATE_PATH)
+        except Exception as e:
+            logging.warning(f"Could not save persistent state: {e}")
 
     async def safe_send_message(
         self,
@@ -423,10 +466,16 @@ class MN_Bot(Client):
             for rel in releases:
                 title = (rel.get("title") or "").strip()
                 direct_link = (rel.get("direct_link") or "").strip()
+                safe_title = escape(title)
+                safe_direct_link = escape(direct_link)
+
                 if direct_link:
-                    blocks.append(f"🎬 - {title}\n🔗 Direct Link: {direct_link}")
+                    blocks.append(
+                        f"🎬 - {safe_title}\n"
+                        f"🔗 Direct Link: {safe_direct_link}"
+                    )
                 else:
-                    blocks.append(f"🎬 - {title}")
+                    blocks.append(f"🎬 - {safe_title}")
 
             if not blocks:
                 return False
@@ -562,9 +611,12 @@ class MN_Bot(Client):
             filename = f"{clean_title.replace(' ', '_')}.torrent"
             file_bytes.name = filename
 
+            safe_title = escape(clean_title)
+            safe_size = escape(str(file.get("size", "Unknown")))
+
             caption = (
-                f"🎬 <b>{clean_title}</b>\n\n"
-                f"📦 <b>Size:</b> {file['size']}\n"
+                f"🎬 <b>{safe_title}</b>\n\n"
+                f"📦 <b>Size:</b> {safe_size}\n"
                 f"📁 <b>Type:</b> Torrent File\n\n"
                 f"#TBL #Torrent"
             )
@@ -722,18 +774,8 @@ class MN_Bot(Client):
                                 success = await self.send_torrent(file_info)
                                 if success:
                                     self.last_posted.add(torrent_link)
+                                    self._save_state()
                                     await asyncio.sleep(3)
-
-                            # The direct link / magnet are only ever announced
-                            # via the summary post below, never as a separate
-                            # document -- so mark them posted regardless of
-                            # whether a torrent document was (re)sent this
-                            # round, otherwise they'd be treated as "new" again
-                            # on every future check.
-                            if direct_link:
-                                self.last_posted.add(direct_link)
-                            if magnet:
-                                self.last_posted.add(magnet)
 
                         # 2. Send the Poster + Caption + Direct Link summary post AFTER torrent
                         topic_to_post = dict(topic_data)
@@ -742,11 +784,25 @@ class MN_Bot(Client):
 
                         summary_posted = await self.send_summary_post(topic_to_post)
                         if summary_posted:
+                            # Only mark direct/magnet links as posted after the
+                            # summary was actually delivered successfully.
+                            for rel in releases_to_send:
+                                direct_link = rel.get("direct_link")
+                                magnet = rel.get("magnet")
+
+                                if direct_link:
+                                    self.last_posted.add(direct_link)
+                                if magnet:
+                                    self.last_posted.add(magnet)
+
+                            self._save_state()
                             await asyncio.sleep(2)
 
                         self.seen_topics.add(topic_url)
+                        self._save_state()
 
                     if is_first_run:
+                        self._save_state()
                         logging.info("Initial cache complete. The bot will now only post newly added torrents.")
                         is_first_run = False
 
