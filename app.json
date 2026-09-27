@@ -1,33 +1,44 @@
 {
-    "name": "Assistent",
-    "description": "Do Nothing",
-    "repository": "https://github.com/GouthamSER/Tamilmv-Rss-Bot",
-    "keywords": [
-      "telegram",
-      "bot"
-    ],
-    "buildpacks": [
-      {
-        "url": "heroku/python"
-      }
-    ],
-    "env": {
-      "TOKEN": {
-        "description": "Telegram Bot token from @BotFather",
-        "required": true
-      },
-      "API_HASH": {
-        "description": "Telegram API hash from https://my.telegram.org",
-        "required": true
-      },
-      "API_ID": {
-        "description": "Telegram API ID from https://my.telegram.org",
-        "required": true
-      },
-      "OWNER": {
-        "description": "Owner's Telegram user ID (from @userinfobot)",
-        "required": true
-      }
+  "name": "TamilMV-RSS-Bot",
+  "description": "Automated Telegram bot that scrapes the latest torrent releases from 1TamilMV and posts them to your Telegram channel.",
+  "repository": "https://github.com/GouthamSER/Tamilmv-Rss-Bot",
+  "keywords": [
+    "telegram",
+    "bot",
+    "tamilmv",
+    "torrent",
+    "rss"
+  ],
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ],
+  "env": {
+    "TOKEN": {
+      "description": "Telegram Bot token from @BotFather",
+      "required": true
+    },
+    "API_HASH": {
+      "description": "Telegram API hash from https://my.telegram.org",
+      "required": true
+    },
+    "API_ID": {
+      "description": "Telegram API ID from https://my.telegram.org",
+      "required": true
+    },
+    "OWNER": {
+      "description": "Owner's Telegram user ID (from @userinfobot)",
+      "required": true
+    },
+    "CHANNEL_ID": {
+      "description": "Target Channel ID where the bot posts automatically",
+      "required": true
+    },
+    "PORT": {
+      "description": "Port on which the web server will run (default: 5000)",
+      "required": false,
+      "value": "5000"
     }
   }
-  
+}

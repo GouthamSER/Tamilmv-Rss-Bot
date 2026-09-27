@@ -10,26 +10,23 @@ from imgj import INLINE, TEXT
 logger = logging.getLogger(__name__)
 
 
-@Client.on_message(filters.command("start"))
-async def start(client: Client, msg: Message):
-    user_name = msg.from_user.mention if msg.from_user else (msg.sender_chat.title if msg.sender_chat else "User")
-    text = TEXT.START.format(user_name)
-
+@Client.on_message(filters.command("help"))
+async def help_command(client: Client, msg: Message):
     try:
         await msg.reply_text(
-            text,
+            TEXT.HELP,
             disable_web_page_preview=True,
-            reply_markup=INLINE.START_BTN,
+            reply_markup=INLINE.HELP_BTN,
         )
     except FloodWait as e:
         await asyncio.sleep(e.value + 1)
         try:
             await msg.reply_text(
-                text,
+                TEXT.HELP,
                 disable_web_page_preview=True,
-                reply_markup=INLINE.START_BTN,
+                reply_markup=INLINE.HELP_BTN,
             )
         except Exception as retry_err:
-            logger.error(f"Failed to reply to /start after FloodWait: {retry_err}")
+            logger.error(f"Failed to reply to /help after FloodWait: {retry_err}")
     except Exception as e:
-        logger.error(f"Error handling /start command: {e}")
+        logger.error(f"Error handling /help command: {e}")
