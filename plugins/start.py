@@ -1,35 +1,16 @@
-import asyncio
-import logging
-
-from pyrogram import Client, filters
-from pyrogram.errors import FloodWait
+from pyrogram import Client as MN_Bot
+from pyrogram import filters
 from pyrogram.types import Message
+from pyrogram.errors import FloodWait
+from imgj import TEXT, INLINE
+import asyncio
 
-from imgj import INLINE, TEXT
 
-logger = logging.getLogger(__name__)
+@MN_Bot.on_message(filters.command("start"))
+async def start(client: MN_Bot, msg: Message):
+    await msg.reply_text(
+        TEXT.START.format(msg.from_user.mention),
+        disable_web_page_preview=True,
+        reply_markup=INLINE.START_BTN,
+    )
 
-
-@Client.on_message(filters.command("start"))
-async def start(client: Client, msg: Message):
-    user_name = msg.from_user.mention if msg.from_user else (msg.sender_chat.title if msg.sender_chat else "User")
-    text = TEXT.START.format(user_name)
-
-    try:
-        await msg.reply_text(
-            text,
-            disable_web_page_preview=True,
-            reply_markup=INLINE.START_BTN,
-        )
-    except FloodWait as e:
-        await asyncio.sleep(e.value + 1)
-        try:
-            await msg.reply_text(
-                text,
-                disable_web_page_preview=True,
-                reply_markup=INLINE.START_BTN,
-            )
-        except Exception as retry_err:
-            logger.error(f"Failed to reply to /start after FloodWait: {retry_err}")
-    except Exception as e:
-        logger.error(f"Error handling /start command: {e}")
