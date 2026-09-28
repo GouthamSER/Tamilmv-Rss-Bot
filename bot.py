@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import io
 import json
 import logging
@@ -6,12 +7,20 @@ import os
 import re
 import tempfile
 import threading
+import time
+from collections import OrderedDict
 from html import escape
 from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask
+
+try:
+    import lxml  # noqa: F401
+    HTML_PARSER = "lxml"
+except ImportError:
+    HTML_PARSER = "html.parser"
 
 try:
     import cloudscraper
@@ -74,6 +83,12 @@ FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
 MAX_TOPICS = 13
 CHECK_INTERVAL = 600
 
+# Memory guards
+MAX_IMAGE_BYTES = 8 * 1024 * 1024      # poster cap
+MAX_TORRENT_BYTES = 10 * 1024 * 1024   # .torrent cap
+MAX_STATE_SIZE = 10000                 # remembered links / topics
+DOMAIN_TTL = 3600                      # re-discover domain at most once per hour
+
 # Persistent state file: use workspace directory by default so data survives container/OS reboots
 DEFAULT_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rss_bot_state.json")
 STATE_PATH = os.environ.get("STATE_PATH", DEFAULT_STATE_FILE)
@@ -86,6 +101,9 @@ DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+_DOMAIN_CHECKED_AT = 0.0
+_tls = threading.local()
 
 
 def create_scraper():
@@ -118,19 +136,66 @@ def create_scraper():
     return session
 
 
+def get_scraper():
+    """One reusable scraper per thread. Creating a new cloudscraper per call
+    leaked sessions/sockets and was the main RAM growth."""
+    s = getattr(_tls, "scraper", None)
+    if s is None:
+        s = create_scraper()
+        _tls.scraper = s
+    return s
+
+
+def fetch_bytes(url, referer=None, max_bytes=MAX_IMAGE_BYTES, timeout=25):
+    """Download with a hard size cap, streamed, so a huge file never fills RAM."""
+    scraper = get_scraper()
+    headers = {"Referer": referer} if referer else {}
+    resp = scraper.get(url, timeout=timeout, headers=headers, stream=True)
+    try:
+        resp.raise_for_status()
+        clen = resp.headers.get("Content-Length", "")
+        if clen.isdigit() and int(clen) > max_bytes:
+            raise ValueError(f"File too large ({clen} bytes)")
+        buf = bytearray()
+        for chunk in resp.iter_content(65536):
+            if not chunk:
+                continue
+            buf.extend(chunk)
+            if len(buf) > max_bytes:
+                raise ValueError(f"File exceeded {max_bytes} bytes")
+        if not buf:
+            raise ValueError("Empty response")
+        return bytes(buf)
+    finally:
+        resp.close()
+
+
+def _set_active_domain(base):
+    global BASE_URL, FORUM_URL, _DOMAIN_CHECKED_AT
+    BASE_URL = base.rstrip("/")
+    FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
+    _DOMAIN_CHECKED_AT = time.time()
+    return BASE_URL
+
+
+def _invalidate_domain_cache():
+    global _DOMAIN_CHECKED_AT
+    _DOMAIN_CHECKED_AT = 0.0
+
+
 def discover_active_domain():
     """
     Checks gateway domains and follows redirects or reads
-    the official announcement banner to automatically discover the current active domain.
+    the official announcement banner to discover the current active domain.
+    Result is cached for DOMAIN_TTL seconds.
     """
-    global BASE_URL, FORUM_URL
-
     if NETWORK.BASE_URL:
-        BASE_URL = NETWORK.BASE_URL.rstrip("/")
-        FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
+        return _set_active_domain(NETWORK.BASE_URL)
+
+    if _DOMAIN_CHECKED_AT and (time.time() - _DOMAIN_CHECKED_AT) < DOMAIN_TTL:
         return BASE_URL
 
-    scraper = create_scraper()
+    scraper = get_scraper()
 
     # 1. Test redirect gateways
     for gateway in ["https://www.1tamilmv.rocks", "https://www.1tamilmv.lease", "https://www.1tamilmv.fi"]:
@@ -142,9 +207,7 @@ def discover_active_domain():
                 final_domain = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
                 if "tamilmv" in final_domain.lower():
                     logger.info(f"Gateway {gateway} redirected to active domain: {final_domain}")
-                    BASE_URL = final_domain
-                    FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
-                    return BASE_URL
+                    return _set_active_domain(final_domain)
         except Exception as e:
             logger.debug(f"Gateway check failed for {gateway}: {e}")
 
@@ -153,7 +216,6 @@ def discover_active_domain():
         try:
             r = scraper.get(dom, timeout=10, allow_redirects=True)
             if r.status_code == 200:
-                # Banner might be wrapped in HTML tags like <span class="ipbWidget_domain">WWW.1TAMILMV.LEASE</span>
                 banner_match = re.search(
                     r"official\s+website.*?((?:WWW\.)?1TAMILMV\.[A-Z0-9.-]+)",
                     r.text,
@@ -165,17 +227,11 @@ def discover_active_domain():
                         official = f"https://{domain_name}"
                     else:
                         official = domain_name
-                    official = official.rstrip("/")
                     logger.info(f"Official domain discovered from site banner: {official}")
-                    BASE_URL = official
-                    FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
-                    return BASE_URL
+                    return _set_active_domain(official)
 
                 parsed = urlparse(r.url)
-                base = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
-                BASE_URL = base
-                FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
-                return BASE_URL
+                return _set_active_domain(f"{parsed.scheme}://{parsed.netloc}")
         except Exception as e:
             logger.debug(f"Known domain check failed for {dom}: {e}")
 
@@ -189,16 +245,10 @@ def download_thumbnail():
             return THUMB_PATH
 
         logger.info("Downloading Telegram thumbnail...")
-        scraper = create_scraper()
-        response = scraper.get(
-            THUMB_URL,
-            timeout=20,
-            headers={"User-Agent": DEFAULT_HEADERS["User-Agent"]}
-        )
-        response.raise_for_status()
+        data = fetch_bytes(THUMB_URL, max_bytes=MAX_IMAGE_BYTES, timeout=20)
 
         with open(THUMB_PATH, "wb") as file:
-            file.write(response.content)
+            file.write(data)
 
         if not os.path.exists(THUMB_PATH) or os.path.getsize(THUMB_PATH) == 0:
             logger.error("Thumbnail file is empty.")
@@ -215,14 +265,7 @@ def download_image(url, referer=None):
     if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
         return None
     try:
-        scraper = create_scraper()
-        headers = dict(DEFAULT_HEADERS)
-        if referer:
-            headers["Referer"] = referer
-        response = scraper.get(url, timeout=25, headers=headers)
-        response.raise_for_status()
-        if response.content and len(response.content) > 0:
-            return response.content
+        return fetch_bytes(url, referer=referer, max_bytes=MAX_IMAGE_BYTES, timeout=25)
     except Exception as e:
         logger.warning(f"Failed to download image from {url}: {e}")
     return None
@@ -277,9 +320,39 @@ def _extract_btih(magnet: str) -> str:
     return m.group(1).lower() if m else ""
 
 
+class BoundedSet:
+    """Insertion-ordered set capped at maxlen. Oldest entries drop first
+    (plain set + slice dropped random entries)."""
+
+    def __init__(self, items=(), maxlen=MAX_STATE_SIZE):
+        self.maxlen = maxlen
+        self._d = OrderedDict()
+        for item in items:
+            self._d[item] = None
+        self._trim()
+
+    def _trim(self):
+        while len(self._d) > self.maxlen:
+            self._d.popitem(last=False)
+
+    def add(self, item):
+        self._d.pop(item, None)
+        self._d[item] = None
+        self._trim()
+
+    def __contains__(self, item):
+        return item in self._d
+
+    def __len__(self):
+        return len(self._d)
+
+    def __iter__(self):
+        return iter(self._d)
+
+
 def crawl_tbl():
     topics = []
-    scraper = create_scraper()
+    scraper = get_scraper()
 
     try:
         discover_active_domain()
@@ -302,9 +375,10 @@ def crawl_tbl():
 
         if not response:
             logger.warning("Could not reach 1TamilMV forum listing from any known endpoint.")
+            _invalidate_domain_cache()  # domain may have changed; re-discover next round
             return topics
 
-        soup = BeautifulSoup(response.text, "html.parser")
+        soup = BeautifulSoup(response.text, HTML_PARSER)
         topic_links = []
 
         for a in soup.find_all("a", href=True):
@@ -322,10 +396,15 @@ def crawl_tbl():
                 full_url = urljoin(BASE_URL, clean_href)
                 topic_links.append(full_url)
 
+        # Free listing page before fetching topics
+        soup.decompose()
+        del soup, response
+
         topic_links = list(dict.fromkeys(topic_links))
         logger.info(f"Found {len(topic_links)} unique topic links.")
 
         for topic_url in topic_links[:MAX_TOPICS]:
+            post_soup = None
             try:
                 logger.info(f"Checking topic: {topic_url}")
                 topic_response = scraper.get(
@@ -335,7 +414,8 @@ def crawl_tbl():
                 )
                 topic_response.raise_for_status()
 
-                post_soup = BeautifulSoup(topic_response.text, "html.parser")
+                post_soup = BeautifulSoup(topic_response.text, HTML_PARSER)
+                del topic_response
 
                 post = (
                     post_soup.find("div", attrs={"data-role": "commentContent"})
@@ -366,15 +446,15 @@ def crawl_tbl():
                     break
 
                 page_title_tag = post_soup.find("h1") or post_soup.find("title")
-                raw_page_title = page_title_tag.get_text() if page_title_tag else ""
+                raw_page_title = str(page_title_tag.get_text()) if page_title_tag else ""
 
                 releases = []
                 current_rel = None
 
                 for a in post.find_all("a"):
-                    href = a.get("href", "").strip()
+                    href = str(a.get("href", "")).strip()
                     data_fileext = a.get("data-fileext")
-                    raw_text = a.get_text(" ", strip=True)
+                    raw_text = str(a.get_text(" ", strip=True))
 
                     is_torrent = (
                         data_fileext == "torrent"
@@ -383,7 +463,7 @@ def crawl_tbl():
                     )
 
                     if is_torrent:
-                        candidate_title = raw_text or a.get("title", "") or raw_page_title
+                        candidate_title = raw_text or str(a.get("title", "")) or raw_page_title
                         clean_title = clean_release_title(candidate_title)
                         size = extract_size(raw_text or candidate_title)
                         full_tor_url = urljoin(topic_url, href)
@@ -398,7 +478,7 @@ def crawl_tbl():
                         releases.append(current_rel)
                     elif current_rel:
                         href_lower = href.lower()
-                        classes = [c.lower() for c in a.get("class", [])]
+                        classes = [str(c).lower() for c in (a.get("class") or [])]
                         is_direct_candidate = (
                             "DIRECT" in raw_text.upper()
                             or "cyberloom" in href_lower
@@ -429,6 +509,14 @@ def crawl_tbl():
 
             except Exception as topic_error:
                 logger.error(f"Failed to parse topic {topic_url}: {topic_error}")
+            finally:
+                # Always free the parsed DOM of this topic
+                if post_soup is not None:
+                    try:
+                        post_soup.decompose()
+                    except Exception:
+                        pass
+                    post_soup = None
 
         logger.info(f"1TamilMV crawl completed. Topics with releases: {len(topics)}")
         logger.info("========================================")
@@ -449,12 +537,12 @@ class MN_Bot(Client):
             api_hash=API.HASH,
             bot_token=BOT.TOKEN,
             plugins={"root": "plugins"},
-            workers=8
+            workers=2
         )
 
         self.channel_id = CHANNEL.ID
-        self.last_posted = set()
-        self.seen_topics = set()
+        self.last_posted = BoundedSet()
+        self.seen_topics = BoundedSet()
         self.thumbnail_path = None
         self._crawl_task = None
         self._state_lock = threading.Lock()
@@ -463,8 +551,8 @@ class MN_Bot(Client):
 
     def _load_state(self):
         """Load posted-link/topic state from disk so restarts do not lose history."""
-        self.last_posted = set()
-        self.seen_topics = set()
+        self.last_posted = BoundedSet()
+        self.seen_topics = BoundedSet()
 
         load_path = STATE_PATH
         legacy_temp = os.path.join(tempfile.gettempdir(), "rss_bot_state.json")
@@ -478,8 +566,8 @@ class MN_Bot(Client):
             with open(load_path, "r", encoding="utf-8") as file:
                 state = json.load(file)
 
-            self.last_posted = set(state.get("last_posted", []))
-            self.seen_topics = set(state.get("seen_topics", []))
+            self.last_posted = BoundedSet(state.get("last_posted", []))
+            self.seen_topics = BoundedSet(state.get("seen_topics", []))
 
             logger.info(
                 f"Loaded state: {len(self.last_posted)} posted links, "
@@ -489,29 +577,17 @@ class MN_Bot(Client):
             logger.warning(f"Could not load persistent state: {e}")
 
     def _save_state(self):
-        """Persist posted-link/topic state atomically."""
+        """Persist posted-link/topic state atomically (oldest entries already trimmed)."""
         try:
-            # Bound state sets to latest 10,000 to prevent unbounded file growth
-            MAX_STATE_SIZE = 10000
-            last_posted_list = list(self.last_posted)
-            if len(last_posted_list) > MAX_STATE_SIZE:
-                last_posted_list = last_posted_list[-MAX_STATE_SIZE:]
-                self.last_posted = set(last_posted_list)
-
-            seen_topics_list = list(self.seen_topics)
-            if len(seen_topics_list) > MAX_STATE_SIZE:
-                seen_topics_list = seen_topics_list[-MAX_STATE_SIZE:]
-                self.seen_topics = set(seen_topics_list)
-
             state = {
-                "last_posted": sorted(last_posted_list),
-                "seen_topics": sorted(seen_topics_list),
+                "last_posted": list(self.last_posted),
+                "seen_topics": list(self.seen_topics),
             }
 
             temp_path = f"{STATE_PATH}.tmp"
             with self._state_lock:
                 with open(temp_path, "w", encoding="utf-8") as file:
-                    json.dump(state, file, ensure_ascii=False, indent=2)
+                    json.dump(state, file, ensure_ascii=False)
                 os.replace(temp_path, STATE_PATH)
         except Exception as e:
             logger.warning(f"Could not save persistent state: {e}")
@@ -588,18 +664,22 @@ class MN_Bot(Client):
 
             blocks = []
             for rel in releases:
-                title = (rel.get("title") or "").strip()
+                # Cap RAW title first, escape after -> never cut inside an HTML entity
+                title = (rel.get("title") or "").strip()[:200]
                 direct_link = (rel.get("direct_link") or "").strip()
                 safe_title = escape(title)
                 safe_direct_link = escape(direct_link)
 
                 if direct_link:
-                    blocks.append(
+                    block = (
                         f"🎬 - {safe_title}\n"
                         f"🔗 Direct Link: {safe_direct_link}"
                     )
+                    if len(block) > 950:
+                        block = f"🎬 - {safe_title}"
                 else:
-                    blocks.append(f"🎬 - {safe_title}")
+                    block = f"🎬 - {safe_title}"
+                blocks.append(block)
 
             if not blocks:
                 return False
@@ -610,8 +690,6 @@ class MN_Bot(Client):
             current_len = 0
 
             for block in blocks:
-                if len(block) > 900:
-                    block = block[:897] + "..."
                 block_len = len(block)
                 needed = block_len if not current_chunk else (block_len + 2)
                 if current_chunk and (current_len + needed > 950):
@@ -640,6 +718,7 @@ class MN_Bot(Client):
                 if image_content:
                     image_bytes = io.BytesIO(image_content)
                     image_bytes.name = "poster.jpg"
+                    del image_content
 
             max_retries = 3
             sent_successfully = False
@@ -712,18 +791,15 @@ class MN_Bot(Client):
         try:
             logger.info(f"Downloading torrent: {file['title']}")
 
-            def _download():
-                scraper = create_scraper()
-                res = scraper.get(
-                    file["link"],
-                    timeout=30,
-                    headers={"Referer": BASE_URL}
-                )
-                res.raise_for_status()
-                return res.content
-
-            content = await asyncio.to_thread(_download)
+            content = await asyncio.to_thread(
+                fetch_bytes,
+                file["link"],
+                BASE_URL,
+                MAX_TORRENT_BYTES,
+                30
+            )
             file_bytes = io.BytesIO(content)
+            del content
 
             clean_title = re.sub(r'[\\/:*?"<>|]', "_", file["title"]).strip()
             clean_title = re.sub(r"\s+", " ", clean_title).strip()
@@ -909,6 +985,10 @@ class MN_Bot(Client):
                         self._save_state()
                         logger.info("Initial cache complete. The bot will now only post newly added torrents.")
                         self.is_first_run = False
+
+                # Drop crawl results and return freed memory each cycle
+                topics = None
+                gc.collect()
 
             except asyncio.CancelledError:
                 raise
