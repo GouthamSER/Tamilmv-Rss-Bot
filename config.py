@@ -49,3 +49,22 @@ class NETWORK:
     """
     PROXY = os.environ.get("PROXY", "")
     BASE_URL = os.environ.get("BASE_URL", "")
+
+
+class DATABASE:
+    """
+    MONGO_URI: MongoDB connection string (keeps state across redeploys). Empty = bot runs without saving state.
+    DB_NAME: Mongo database name
+    """
+    MONGO_URI = os.environ.get("MONGO_URI", "")
+    DB_NAME = os.environ.get("DB_NAME", "rssbot")
+
+
+class LIMITS:
+    """
+    POST_LIMIT: Max topics posted per check cycle. Extra backlog carries to the next cycle.
+    CATCHUP_INTERVAL: Seconds to wait before the next cycle while backlog remains.
+    """
+    POST_LIMIT = int(os.environ.get("POST_LIMIT", 3))
+    CATCHUP_INTERVAL = int(os.environ.get("CATCHUP_INTERVAL", 120))
+

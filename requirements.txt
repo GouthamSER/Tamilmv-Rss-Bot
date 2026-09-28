@@ -13,3 +13,4 @@ bencodepy
 certifi
 urllib3
 setuptools
+pymongo[srv]

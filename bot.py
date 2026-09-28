@@ -3,7 +3,6 @@ import io
 import logging
 import os
 import re
-import sqlite3
 import tempfile
 import threading
 from html import escape
@@ -22,7 +21,8 @@ except ImportError:
 from pyrogram import Client, utils as pyroutils
 from pyrogram.enums import ParseMode
 from pyrogram.errors import FloodWait
-from config import BOT, API, OWNER, CHANNEL, WEB, NETWORK
+from config import BOT, API, OWNER, CHANNEL, WEB, NETWORK, LIMITS
+from plugins.db import StateDB
 
 pyroutils.MIN_CHAT_ID = -999999999999
 pyroutils.MIN_CHANNEL_ID = -10099999999999
@@ -54,7 +54,7 @@ FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
 MAX_TOPICS = 13
 CHECK_INTERVAL = 600
 
-THUMB_URL = "https://i.ibb.co/DPrwsGsC/IMG-20260919-174828-023.jpg"
+THUMB_URL = os.getenv("THUMB_URL") or "https://i.ibb.co/DPrwsGsC/IMG-20260919-174828-023.jpg"
 THUMB_PATH = os.path.join(tempfile.gettempdir(), "tbl_thumb.jpg")
 
 DEFAULT_HEADERS = {
@@ -163,6 +163,44 @@ def download_thumbnail():
     except Exception as error:
         logging.error(f"Failed to download thumbnail: {error}")
         return None
+
+
+def sync_thumbnail(db):
+    """
+    Thumbnail image lives in the DB. Local file is only a cache for Pyrogram.
+    - Same URL + file on disk      -> reuse.
+    - Same URL + file missing      -> restore from DB (no web download).
+    - URL changed / nothing in DB  -> delete old file, download new, replace in DB.
+    Bytes are never kept in memory after this function returns.
+    """
+    stored_url = db.get_thumb_url()
+    has_file = os.path.exists(THUMB_PATH) and os.path.getsize(THUMB_PATH) > 0
+
+    if stored_url == THUMB_URL:
+        if has_file:
+            logging.info("Thumbnail unchanged, using existing file.")
+            return THUMB_PATH
+
+        data = db.get_thumb_data()
+        if data:
+            with open(THUMB_PATH, "wb") as f:
+                f.write(data)
+            del data
+            logging.info("Thumbnail restored from DB.")
+            return THUMB_PATH
+
+    if os.path.exists(THUMB_PATH):
+        try:
+            os.remove(THUMB_PATH)
+            logging.info("Old thumbnail deleted.")
+        except Exception as error:
+            logging.warning(f"Could not delete old thumbnail: {error}")
+
+    path = download_thumbnail()
+    if path:
+        with open(path, "rb") as f:
+            db.set_thumb(THUMB_URL, f.read())
+    return path
 
 
 def download_image(url, referer=None):
@@ -379,45 +417,27 @@ class MN_Bot(Client):
         self.thumbnail_path = None
         self._crawl_task = None
 
-        # Persistent state
-        data_dir = os.getenv("DATA_DIR", ".") or "."
-        self.state_db = os.path.join(data_dir, "bot_state.sqlite3")
-
-        self._init_state_db()
-        self._load_state()
-
-    # ---------- state ----------
-
-    def _init_state_db(self):
-        os.makedirs(os.path.dirname(os.path.abspath(self.state_db)), exist_ok=True)
-
-        with sqlite3.connect(self.state_db) as conn:
-            conn.execute("CREATE TABLE IF NOT EXISTS posted_links (link TEXT PRIMARY KEY)")
-            conn.execute("CREATE TABLE IF NOT EXISTS seen_topics (topic_url TEXT PRIMARY KEY)")
-
-    def _load_state(self):
-        with sqlite3.connect(self.state_db) as conn:
-            self.last_posted = {r[0] for r in conn.execute("SELECT link FROM posted_links")}
-            self.seen_topics = {r[0] for r in conn.execute("SELECT topic_url FROM seen_topics")}
-
+        # Persistent state (Mongo if MONGO_URI set, else SQLite)
+        self.db = StateDB()
+        self.last_posted, self.seen_topics = self.db.load()
         logging.info(
             f"Loaded state: {len(self.last_posted)} posted links, "
             f"{len(self.seen_topics)} seen topics"
         )
 
+    # ---------- state ----------
+
     def _mark_posted(self, link):
         if not link:
             return
         self.last_posted.add(link)
-        with sqlite3.connect(self.state_db) as conn:
-            conn.execute("INSERT OR IGNORE INTO posted_links(link) VALUES (?)", (link,))
+        self.db.add_link(link)
 
     def _mark_topic_seen(self, topic_url):
         if not topic_url:
             return
         self.seen_topics.add(topic_url)
-        with sqlite3.connect(self.state_db) as conn:
-            conn.execute("INSERT OR IGNORE INTO seen_topics(topic_url) VALUES (?)", (topic_url,))
+        self.db.add_topic(topic_url)
 
     # ---------- sending ----------
 
@@ -653,6 +673,8 @@ class MN_Bot(Client):
         is_first_run = not self.last_posted and not self.seen_topics
 
         while True:
+            backlog = False
+
             try:
                 topics, crawl_ok = await asyncio.to_thread(crawl_tbl)
 
@@ -676,6 +698,8 @@ class MN_Bot(Client):
                             "to avoid spamming old posts."
                         )
 
+                    posted_topics = 0
+
                     for topic_data in topics:
                         topic_url = topic_data["topic_url"]
                         releases = topic_data.get("releases", [])
@@ -696,6 +720,12 @@ class MN_Bot(Client):
                         # Already processed topic
                         if topic_url in self.seen_topics and not new_releases:
                             continue
+
+                        # Backlog cap (e.g. after long downtime). Skipped topics stay
+                        # unmarked, so the next cycle picks them up (oldest first).
+                        if posted_topics >= LIMITS.POST_LIMIT:
+                            backlog = True
+                            break
 
                         logging.info(f"Topic: {topic_data.get('title', 'Unknown')}")
                         logging.info(f"New releases to post: {len(new_releases)}")
@@ -733,6 +763,7 @@ class MN_Bot(Client):
                                     self._mark_posted(rel["magnet"])
 
                             self._mark_topic_seen(topic_url)
+                            posted_topics += 1
                             await asyncio.sleep(2)
 
                     if is_first_run:
@@ -748,8 +779,14 @@ class MN_Bot(Client):
             except Exception as error:
                 logging.error(f"Error in auto_post_torrents: {error}", exc_info=True)
 
-            logging.info("Tasks completed. Sleeping while waiting for new torrents...")
-            await asyncio.sleep(CHECK_INTERVAL)
+            if backlog:
+                logging.info(
+                    f"Backlog remains. Next cycle in {LIMITS.CATCHUP_INTERVAL}s."
+                )
+                await asyncio.sleep(LIMITS.CATCHUP_INTERVAL)
+            else:
+                logging.info("Tasks completed. Sleeping while waiting for new torrents...")
+                await asyncio.sleep(CHECK_INTERVAL)
 
     async def _supervisor_loop(self):
         while True:
@@ -772,7 +809,7 @@ class MN_Bot(Client):
     async def start(self):
         await super().start()
 
-        self.thumbnail_path = await asyncio.to_thread(download_thumbnail)
+        self.thumbnail_path = await asyncio.to_thread(sync_thumbnail, self.db)
 
         me = await self.get_me()
         BOT.USERNAME = f"@{me.username}" if me.username else me.first_name
