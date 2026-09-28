@@ -3,8 +3,10 @@ import io
 import logging
 import os
 import re
+import sqlite3
 import tempfile
 import threading
+from html import escape
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -30,12 +32,15 @@ logging.getLogger("pyrogram").setLevel(logging.ERROR)
 
 app = Flask(__name__)
 
+
 @app.route("/")
 def home():
     return "Bot is running!"
 
+
 def run_flask():
     app.run(host="0.0.0.0", port=WEB.PORT, threaded=True)
+
 
 GATEWAY_DOMAINS = [
     "https://www.1tamilmv.fi",
@@ -45,6 +50,7 @@ GATEWAY_DOMAINS = [
 
 BASE_URL = NETWORK.BASE_URL.rstrip("/") if NETWORK.BASE_URL else "https://www.1tamilmv.rocks"
 FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
+
 MAX_TOPICS = 13
 CHECK_INTERVAL = 600
 
@@ -52,95 +58,85 @@ THUMB_URL = "https://i.ibb.co/DPrwsGsC/IMG-20260919-174828-023.jpg"
 THUMB_PATH = os.path.join(tempfile.gettempdir(), "tbl_thumb.jpg")
 
 DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,*/*;q=0.8"
+    ),
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+
+def _set_base(url):
+    global BASE_URL, FORUM_URL
+    BASE_URL = url
+    FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
+    return BASE_URL
+
 
 def create_scraper():
     if HAS_CLOUDSCRAPER:
         try:
             s = cloudscraper.create_scraper(
-                browser={
-                    "browser": "chrome",
-                    "platform": "windows",
-                    "mobile": False
-                }
+                browser={"browser": "chrome", "platform": "windows", "mobile": False}
             )
             if NETWORK.PROXY:
-                s.proxies = {
-                    "http": NETWORK.PROXY,
-                    "https": NETWORK.PROXY
-                }
+                s.proxies = {"http": NETWORK.PROXY, "https": NETWORK.PROXY}
             return s
-        except Exception:
-            pass
+        except Exception as error:
+            logging.warning(f"Could not create Cloudscraper session: {error}")
 
     session = requests.Session()
     session.headers.update(DEFAULT_HEADERS)
     if NETWORK.PROXY:
-        session.proxies = {
-            "http": NETWORK.PROXY,
-            "https": NETWORK.PROXY
-        }
+        session.proxies = {"http": NETWORK.PROXY, "https": NETWORK.PROXY}
     return session
 
-def discover_active_domain():
-    """
-    Checks gateway domains (e.g. WWW.1TAMILMV.FI) and follows redirects or reads
-    the official announcement banner to automatically discover the current active domain.
-    """
-    global BASE_URL, FORUM_URL
 
+def discover_active_domain():
+    """Follow gateway redirects or read the site banner to find the active domain."""
     if NETWORK.BASE_URL:
-        BASE_URL = NETWORK.BASE_URL.rstrip("/")
-        FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
-        return BASE_URL
+        return _set_base(NETWORK.BASE_URL.rstrip("/"))
 
     scraper = create_scraper()
 
-    # 1. Test permanent redirect gateway (WWW.1TAMILMV.FI)
+    # 1. Permanent redirect gateways
     for gateway in ["https://www.1tamilmv.fi", "https://1tamilmv.fi"]:
         try:
             r = scraper.get(gateway, timeout=8, allow_redirects=False)
             if r.status_code in (301, 302, 307, 308) and r.headers.get("Location"):
-                target = r.headers["Location"]
-                parsed = urlparse(target)
-                final_domain = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
-                if "tamilmv" in final_domain.lower():
-                    logging.info(f"Gateway {gateway} redirected to active domain: {final_domain}")
-                    BASE_URL = final_domain
-                    FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
-                    return BASE_URL
-        except Exception as e:
-            logging.debug(f"Gateway check failed for {gateway}: {e}")
+                p = urlparse(r.headers["Location"])
+                final = f"{p.scheme}://{p.netloc}".rstrip("/")
+                if "tamilmv" in final.lower():
+                    logging.info(f"Gateway {gateway} redirected to active domain: {final}")
+                    return _set_base(final)
+        except Exception as error:
+            logging.debug(f"Gateway check failed for {gateway}: {error}")
 
-    # 2. Check current known domains and check official announcement banner
-    for dom in GATEWAY_DOMAINS:
+    # 2. Known domains
+    for domain in GATEWAY_DOMAINS:
         try:
-            r = scraper.get(dom, timeout=10, allow_redirects=True)
+            r = scraper.get(domain, timeout=10, allow_redirects=True)
             if r.status_code == 200:
-                banner_match = re.search(
-                    r"official\s+website\s+(WWW\.[A-Z0-9.-]+)",
-                    r.text,
-                    re.IGNORECASE
+                m = re.search(
+                    r"official\s+website\s+(WWW\.[A-Z0-9.-]+)", r.text, re.IGNORECASE
                 )
-                if banner_match:
-                    official = f"https://{banner_match.group(1).lower()}".rstrip("/")
+                if m:
+                    official = f"https://{m.group(1).lower()}".rstrip("/")
                     logging.info(f"Official domain discovered from site banner: {official}")
-                    BASE_URL = official
-                    FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
-                    return BASE_URL
+                    return _set_base(official)
 
-                parsed = urlparse(r.url)
-                base = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
-                BASE_URL = base
-                FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
-                return BASE_URL
-        except Exception as e:
-            logging.debug(f"Known domain check failed for {dom}: {e}")
+                p = urlparse(r.url)
+                return _set_base(f"{p.scheme}://{p.netloc}".rstrip("/"))
+        except Exception as error:
+            logging.debug(f"Known domain check failed for {domain}: {error}")
 
     return BASE_URL
+
 
 def download_thumbnail():
     try:
@@ -149,16 +145,13 @@ def download_thumbnail():
             return THUMB_PATH
 
         logging.info("Downloading Telegram thumbnail...")
-        scraper = create_scraper()
-        response = scraper.get(
-            THUMB_URL,
-            timeout=20,
-            headers={"User-Agent": DEFAULT_HEADERS["User-Agent"]}
+        r = create_scraper().get(
+            THUMB_URL, timeout=20, headers={"User-Agent": DEFAULT_HEADERS["User-Agent"]}
         )
-        response.raise_for_status()
+        r.raise_for_status()
 
-        with open(THUMB_PATH, "wb") as file:
-            file.write(response.content)
+        with open(THUMB_PATH, "wb") as f:
+            f.write(r.content)
 
         if not os.path.exists(THUMB_PATH) or os.path.getsize(THUMB_PATH) == 0:
             logging.error("Thumbnail file is empty.")
@@ -167,48 +160,145 @@ def download_thumbnail():
         logging.info(f"Thumbnail downloaded successfully: {THUMB_PATH}")
         return THUMB_PATH
 
-    except Exception as e:
-        logging.error(f"Failed to download thumbnail: {e}")
+    except Exception as error:
+        logging.error(f"Failed to download thumbnail: {error}")
         return None
+
 
 def download_image(url, referer=None):
     try:
-        scraper = create_scraper()
         headers = dict(DEFAULT_HEADERS)
         if referer:
             headers["Referer"] = referer
-        response = scraper.get(url, timeout=25, headers=headers)
-        response.raise_for_status()
-        if response.content and len(response.content) > 0:
-            return response.content
-    except Exception as e:
-        logging.warning(f"Failed to download image from {url}: {e}")
+
+        r = create_scraper().get(url, timeout=25, headers=headers)
+        r.raise_for_status()
+
+        if r.content:
+            return r.content
+    except Exception as error:
+        logging.warning(f"Failed to download image from {url}: {error}")
     return None
 
+
 def extract_size(text):
-    match = re.search(
-        r"(\d+(?:\.\d+)?\s*(?:GB|MB|KB))",
-        text,
-        re.IGNORECASE
-    )
-    return match.group(1) if match else "Unknown"
+    m = re.search(r"(\d+(?:\.\d+)?\s*(?:GB|MB|KB))", text, re.IGNORECASE)
+    return m.group(1) if m else "Unknown"
+
 
 def clean_release_title(raw_title):
-    title = raw_title.strip()
-    title = re.sub(r"^www\.\S+\s*-\s*", "", title, flags=re.IGNORECASE).strip()
+    title = re.sub(r"^www\.\S+\s*-\s*", "", raw_title.strip(), flags=re.IGNORECASE).strip()
+
     if title.lower().endswith(".torrent"):
         title = title[:-8].strip()
     if title.lower().endswith(".mkv"):
         title = title[:-4].strip()
-    title = re.sub(r"\s+", " ", title).strip()
-    return title or "1TamilMV Release"
+
+    return re.sub(r"\s+", " ", title).strip() or "1TamilMV Release"
+
+
+BAD_IMG_WORDS = [
+    "smilies", "border", "utorrent", "torrborder",
+    "default_large", "theme", "icon", "blank.gif",
+]
+
+
+def parse_topic(scraper, topic_url):
+    """Fetch one topic page. Returns topic dict or None."""
+    logging.info(f"Checking topic: {topic_url}")
+
+    r = scraper.get(topic_url, timeout=20, headers={"Referer": FORUM_URL})
+    r.raise_for_status()
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    post = (
+        soup.find("div", attrs={"data-role": "commentContent"})
+        or soup.find("div", class_="cPost_contentWrap")
+    )
+    if not post:
+        return None
+
+    # Poster image
+    poster_url = None
+    for img in post.find_all("img"):
+        src = img.get("src") or img.get("data-src")
+        if not src:
+            continue
+        if any(bad in src.lower() for bad in BAD_IMG_WORDS):
+            continue
+        poster_url = urljoin(topic_url, src)
+        break
+
+    # Releases
+    releases = []
+    current = None
+
+    for a in post.find_all("a"):
+        href = a.get("href", "").strip()
+        href_lower = href.lower()
+        fileext = a.get("data-fileext")
+        raw_text = a.get_text(" ", strip=True)
+
+        is_torrent = (
+            (fileext and fileext.lower() == "torrent")
+            or ("attachment.php" in href_lower and "key=" in href_lower)
+            or href_lower.endswith(".torrent")
+        )
+
+        if is_torrent:
+            current = {
+                "title": clean_release_title(raw_text),
+                "torrent_link": urljoin(topic_url, href),
+                "size": extract_size(raw_text),
+                "direct_link": None,
+                "magnet": None,
+            }
+            releases.append(current)
+
+        elif current:
+            classes = [c.lower() for c in a.get("class", [])]
+
+            is_direct = (
+                "DIRECT" in raw_text.upper()
+                or "cyberloom" in href_lower
+                or any("download" in c for c in classes)
+            )
+
+            if is_direct:
+                if href.startswith("http") and not current["direct_link"]:
+                    current["direct_link"] = href
+            elif href.startswith("magnet:"):
+                if not current["magnet"]:
+                    current["magnet"] = href
+
+    if not releases:
+        return None
+
+    title_tag = soup.find("h1") or soup.find("title")
+    topic_title = (
+        clean_release_title(title_tag.get_text()) if title_tag else releases[0]["title"]
+    )
+
+    logging.info(
+        f"Parsed topic with {len(releases)} release(s) - "
+        f"Poster: {'Yes' if poster_url else 'No'}"
+    )
+
+    return {
+        "topic_url": topic_url,
+        "title": topic_title,
+        "poster_url": poster_url,
+        "releases": releases,
+    }
+
 
 def crawl_tbl():
     topics = []
+    crawl_ok = False
+    topic_parse_failed = False
     scraper = create_scraper()
 
     try:
-        # Automatically discover or verify active domain from gateway
         discover_active_domain()
 
         logging.info("========================================")
@@ -217,154 +307,58 @@ def crawl_tbl():
         logging.info(f"Forum URL: {FORUM_URL}")
 
         try:
-            response = scraper.get(
-                FORUM_URL,
-                timeout=20,
-                headers={"Referer": BASE_URL}
-            )
+            response = scraper.get(FORUM_URL, timeout=20, headers={"Referer": BASE_URL})
             response.raise_for_status()
-        except Exception as conn_err:
-            logging.warning(f"Connection to {FORUM_URL} failed ({conn_err}). Attempting to rediscover active domain...")
-            discover_active_domain()
-            response = scraper.get(
-                FORUM_URL,
-                timeout=20,
-                headers={"Referer": BASE_URL}
+        except Exception as connection_error:
+            logging.warning(
+                f"Connection to {FORUM_URL} failed ({connection_error}). "
+                "Attempting to rediscover active domain..."
             )
+            discover_active_domain()
+            response = scraper.get(FORUM_URL, timeout=20, headers={"Referer": BASE_URL})
             response.raise_for_status()
 
         soup = BeautifulSoup(response.text, "html.parser")
-        topic_links = []
 
+        topic_links = []
         for a in soup.find_all("a", href=True):
             href = a.get("href", "").strip()
             if not href:
                 continue
-
             if re.search(r"index\.php\?/forums/topic/", href, re.IGNORECASE) and not href.endswith("-0/"):
-                full_url = urljoin(BASE_URL, href)
-                topic_links.append(full_url)
+                topic_links.append(urljoin(BASE_URL, href))
 
         topic_links = list(dict.fromkeys(topic_links))
         logging.info(f"Found {len(topic_links)} topic links.")
 
         for topic_url in topic_links[:MAX_TOPICS]:
             try:
-                logging.info(f"Checking topic: {topic_url}")
-
-                topic_response = scraper.get(
-                    topic_url,
-                    timeout=20,
-                    headers={"Referer": FORUM_URL}
-                )
-                topic_response.raise_for_status()
-
-                post_soup = BeautifulSoup(
-                    topic_response.text,
-                    "html.parser"
-                )
-
-                post = (
-                    post_soup.find("div", attrs={"data-role": "commentContent"})
-                    or post_soup.find("div", class_="cPost_contentWrap")
-                )
-
-                if not post:
-                    continue
-
-                # Extract Poster Image URL
-                poster_url = None
-                for img in post.find_all("img"):
-                    src = img.get("src") or img.get("data-src")
-                    if not src:
-                        continue
-                    src_lower = src.lower()
-                    if any(bad in src_lower for bad in [
-                        "smilies", "border", "utorrent", "torrborder",
-                        "default_large", "theme", "icon", "blank.gif"
-                    ]):
-                        continue
-                    poster_url = urljoin(topic_url, src)
-                    break
-
-                # Extract Releases with matching Direct Links & Magnets
-                releases = []
-                current_rel = None
-
-                for a in post.find_all("a"):
-                    href = a.get("href", "").strip()
-                    data_fileext = a.get("data-fileext")
-                    raw_text = a.get_text(" ", strip=True)
-
-                    is_torrent = (
-                        data_fileext == "torrent"
-                        or ("attachment.php" in href and "key=" in href)
-                        or (href.endswith(".torrent"))
-                    )
-
-                    if is_torrent:
-                        clean_title = clean_release_title(raw_text)
-                        size = extract_size(raw_text)
-                        full_tor_url = urljoin(topic_url, href)
-
-                        current_rel = {
-                            "title": clean_title,
-                            "torrent_link": full_tor_url,
-                            "size": size,
-                            "direct_link": None,
-                            "magnet": None,
-                        }
-                        releases.append(current_rel)
-                    elif current_rel:
-                        href_lower = href.lower()
-                        classes = [c.lower() for c in a.get("class", [])]
-                        is_direct_candidate = (
-                            "DIRECT" in raw_text.upper()
-                            or "cyberloom" in href_lower
-                            or any("download" in c for c in classes)
-                        )
-                        if is_direct_candidate:
-                            if href.startswith("http") and not current_rel["direct_link"]:
-                                current_rel["direct_link"] = href
-                        elif href.startswith("magnet:"):
-                            if not current_rel["magnet"]:
-                                current_rel["magnet"] = href
-
-                if releases:
-                    # Determine topic display title from first release or page title
-                    page_title_tag = post_soup.find("h1") or post_soup.find("title")
-                    topic_title = (
-                        clean_release_title(page_title_tag.get_text())
-                        if page_title_tag else releases[0]["title"]
-                    )
-
-                    topics.append({
-                        "topic_url": topic_url,
-                        "title": topic_title,
-                        "poster_url": poster_url,
-                        "releases": releases,
-                    })
-
-                    logging.info(
-                        f"Parsed topic with {len(releases)} release(s) - Poster: {'Yes' if poster_url else 'No'}"
-                    )
-
+                topic = parse_topic(scraper, topic_url)
+                if topic:
+                    topics.append(topic)
             except Exception as topic_error:
-                logging.error(
-                    f"Failed to parse topic {topic_url}: {topic_error}"
-                )
+                topic_parse_failed = True
+                logging.error(f"Failed to parse topic {topic_url}: {topic_error}")
 
-        logging.info(
-            f"1TamilMV crawl completed. Topics with releases: {len(topics)}"
-        )
+        crawl_ok = not topic_parse_failed
+
+        if topic_parse_failed:
+            logging.warning(
+                "One or more topics failed to parse; treating this crawl as incomplete."
+            )
+
+        logging.info(f"1TamilMV crawl completed. Topics with releases: {len(topics)}")
         logging.info("========================================")
 
     except Exception as error:
-        logging.error(
-            f"Failed to fetch 1TamilMV forum: {error}"
-        )
+        logging.error(f"Failed to fetch 1TamilMV forum: {error}")
 
-    return topics
+    return topics, crawl_ok
+
+
+def _rel_links(rel):
+    return [l for l in (rel.get("torrent_link"), rel.get("direct_link"), rel.get("magnet")) if l]
+
 
 class MN_Bot(Client):
     MAX_MSG_LENGTH = 4000
@@ -376,7 +370,7 @@ class MN_Bot(Client):
             api_hash=API.HASH,
             bot_token=BOT.TOKEN,
             plugins={"root": "plugins"},
-            workers=8
+            workers=8,
         )
 
         self.channel_id = CHANNEL.ID
@@ -385,35 +379,57 @@ class MN_Bot(Client):
         self.thumbnail_path = None
         self._crawl_task = None
 
-    async def safe_send_message(
-        self,
-        chat_id,
-        text,
-        **kwargs
-    ):
-        for i in range(
-            0,
-            len(text),
-            self.MAX_MSG_LENGTH
-        ):
-            chunk = text[
-                i:i + self.MAX_MSG_LENGTH
-            ]
+        # Persistent state
+        data_dir = os.getenv("DATA_DIR", ".") or "."
+        self.state_db = os.path.join(data_dir, "bot_state.sqlite3")
 
-            await self.send_message(
-                chat_id,
-                chunk,
-                **kwargs
-            )
+        self._init_state_db()
+        self._load_state()
 
+    # ---------- state ----------
+
+    def _init_state_db(self):
+        os.makedirs(os.path.dirname(os.path.abspath(self.state_db)), exist_ok=True)
+
+        with sqlite3.connect(self.state_db) as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS posted_links (link TEXT PRIMARY KEY)")
+            conn.execute("CREATE TABLE IF NOT EXISTS seen_topics (topic_url TEXT PRIMARY KEY)")
+
+    def _load_state(self):
+        with sqlite3.connect(self.state_db) as conn:
+            self.last_posted = {r[0] for r in conn.execute("SELECT link FROM posted_links")}
+            self.seen_topics = {r[0] for r in conn.execute("SELECT topic_url FROM seen_topics")}
+
+        logging.info(
+            f"Loaded state: {len(self.last_posted)} posted links, "
+            f"{len(self.seen_topics)} seen topics"
+        )
+
+    def _mark_posted(self, link):
+        if not link:
+            return
+        self.last_posted.add(link)
+        with sqlite3.connect(self.state_db) as conn:
+            conn.execute("INSERT OR IGNORE INTO posted_links(link) VALUES (?)", (link,))
+
+    def _mark_topic_seen(self, topic_url):
+        if not topic_url:
+            return
+        self.seen_topics.add(topic_url)
+        with sqlite3.connect(self.state_db) as conn:
+            conn.execute("INSERT OR IGNORE INTO seen_topics(topic_url) VALUES (?)", (topic_url,))
+
+    # ---------- sending ----------
+
+    async def safe_send_message(self, chat_id, text, **kwargs):
+        for i in range(0, len(text), self.MAX_MSG_LENGTH):
+            await self.send_message(chat_id, text[i:i + self.MAX_MSG_LENGTH], **kwargs)
             await asyncio.sleep(1)
 
     async def send_summary_post(self, topic_data):
-        """
-        Sends movie poster and direct links summary post formatted as:
-        🎬 - {Release Title}
-        🔗 Direct Link: {Direct Link}
-        """
+        """Sends movie poster and direct links summary."""
+        image_bytes = None
+
         try:
             releases = topic_data.get("releases", [])
             if not releases:
@@ -421,8 +437,9 @@ class MN_Bot(Client):
 
             blocks = []
             for rel in releases:
-                title = (rel.get("title") or "").strip()
-                direct_link = (rel.get("direct_link") or "").strip()
+                title = escape((rel.get("title") or "").strip())
+                direct_link = escape((rel.get("direct_link") or "").strip(), quote=True)
+
                 if direct_link:
                     blocks.append(f"🎬 - {title}\n🔗 Direct Link: {direct_link}")
                 else:
@@ -431,16 +448,16 @@ class MN_Bot(Client):
             if not blocks:
                 return False
 
-            # Telegram photo caption limit is 1024 characters.
-            # Group blocks into chunks to prevent MEDIA_CAPTION_TOO_LONG errors.
+            # Telegram photo caption limit
             caption_chunks = []
             current_chunk = []
             current_len = 0
 
             for block in blocks:
                 block_len = len(block)
-                needed = block_len if not current_chunk else (block_len + 2)
-                if current_chunk and (current_len + needed > 950):
+                needed = block_len if not current_chunk else block_len + 2
+
+                if current_chunk and current_len + needed > 950:
                     caption_chunks.append("\n\n".join(current_chunk))
                     current_chunk = [block]
                     current_len = block_len
@@ -454,22 +471,19 @@ class MN_Bot(Client):
             first_caption = caption_chunks[0]
             remaining_chunks = caption_chunks[1:]
 
-            # Attempt to download poster image
             poster_url = topic_data.get("poster_url")
-            image_bytes = None
+
             if poster_url:
                 logging.info(f"Downloading poster from: {poster_url}")
-                image_content = await asyncio.to_thread(
-                    download_image,
-                    poster_url,
-                    topic_data.get("topic_url")
+                content = await asyncio.to_thread(
+                    download_image, poster_url, topic_data.get("topic_url")
                 )
-                if image_content:
-                    image_bytes = io.BytesIO(image_content)
+                if content:
+                    image_bytes = io.BytesIO(content)
                     image_bytes.name = "poster.jpg"
 
             max_retries = 3
-            sent_successfully = False
+            sent = False
 
             for attempt in range(max_retries):
                 try:
@@ -480,7 +494,7 @@ class MN_Bot(Client):
                             self.channel_id,
                             photo=image_bytes,
                             caption=first_caption,
-                            parse_mode=ParseMode.HTML
+                            parse_mode=ParseMode.HTML,
                         )
                     elif self.thumbnail_path and os.path.exists(self.thumbnail_path):
                         logging.info("Sending summary post with default thumbnail...")
@@ -488,7 +502,7 @@ class MN_Bot(Client):
                             self.channel_id,
                             photo=self.thumbnail_path,
                             caption=first_caption,
-                            parse_mode=ParseMode.HTML
+                            parse_mode=ParseMode.HTML,
                         )
                     else:
                         logging.info("Sending summary post as text message...")
@@ -496,75 +510,73 @@ class MN_Bot(Client):
                             self.channel_id,
                             first_caption,
                             parse_mode=ParseMode.HTML,
-                            disable_web_page_preview=False
+                            disable_web_page_preview=False,
                         )
 
-                    sent_successfully = True
+                    sent = True
                     break
 
-                except FloodWait as e:
+                except FloodWait as error:
                     logging.warning(
-                        f"FloodWait in send_summary_post: waiting {e.value}s (attempt {attempt + 1}/{max_retries})"
+                        f"FloodWait in send_summary_post: waiting {error.value}s "
+                        f"(attempt {attempt + 1}/{max_retries})"
                     )
-                    await asyncio.sleep(e.value + 2)
-                except Exception as e:
-                    logging.error(f"Error in send_summary_post (attempt {attempt + 1}): {e}")
-                    # If photo upload fails, fall back to text message on next attempt
-                    image_bytes = None
+                    await asyncio.sleep(error.value + 2)
+
+                except Exception as error:
+                    logging.error(f"Error in send_summary_post (attempt {attempt + 1}): {error}")
+                    image_bytes = None  # photo failure -> fallback
                     await asyncio.sleep(2)
 
-            # Send any subsequent chunks that could not fit into the photo caption
-            if sent_successfully and remaining_chunks:
-                for rem_chunk in remaining_chunks:
+            if sent and remaining_chunks:
+                for chunk in remaining_chunks:
                     await asyncio.sleep(1)
                     await self.safe_send_message(
                         self.channel_id,
-                        rem_chunk,
+                        chunk,
                         parse_mode=ParseMode.HTML,
-                        disable_web_page_preview=True
+                        disable_web_page_preview=True,
                     )
 
-            return sent_successfully
+            return sent
 
-        except Exception as err:
-            logging.error(f"Failed in send_summary_post: {err}", exc_info=True)
+        except Exception as error:
+            logging.error(f"Failed in send_summary_post: {error}", exc_info=True)
             return False
+
         finally:
-            if "image_bytes" in locals() and image_bytes:
+            if image_bytes:
                 try:
                     image_bytes.close()
                 except Exception:
                     pass
 
     async def send_torrent(self, file):
+        file_bytes = None
+
         try:
-            logging.info(
-                f"Downloading torrent: {file['title']}"
-            )
+            logging.info(f"Downloading torrent: {file['title']}")
 
             def _download():
-                scraper = create_scraper()
-                res = scraper.get(
-                    file["link"],
-                    timeout=30,
-                    headers={"Referer": BASE_URL}
-                )
-                res.raise_for_status()
-                return res.content
+                r = create_scraper().get(file["link"], timeout=30, headers={"Referer": BASE_URL})
+                r.raise_for_status()
+                return r.content
 
             content = await asyncio.to_thread(_download)
             file_bytes = io.BytesIO(content)
 
-            # Clean title: strip illegal filename chars
             clean_title = re.sub(r'[\\/:*?"<>|]', "_", file["title"]).strip()
             clean_title = re.sub(r"\s+", " ", clean_title).strip()
+
+            safe_title = escape(clean_title)
+            safe_size = escape(str(file.get("size", "Unknown")))
 
             filename = f"{clean_title.replace(' ', '_')}.torrent"
             file_bytes.name = filename
 
             caption = (
-                f"🎬 <b>{clean_title}</b>\n\n"
-                f"📦 <b>Size:</b> {file['size']}\n"
+                f"🎬 <b>{safe_title}</b>\n\n"
+                f"📦 <b>Size:</b> {safe_size}\n"
                 f"📁 <b>Type:</b> Torrent File\n\n"
                 f"#TBL #Torrent"
             )
@@ -580,178 +592,159 @@ class MN_Bot(Client):
             )
 
             max_retries = 3
+
             for attempt in range(max_retries):
                 try:
                     if thumb:
-                        logging.info(
-                            "Sending torrent with thumbnail..."
-                        )
+                        logging.info("Sending torrent with thumbnail...")
                         await self.send_document(
                             self.channel_id,
                             file_bytes,
                             file_name=filename,
                             thumb=thumb,
                             caption=caption,
-                            parse_mode=ParseMode.HTML
+                            parse_mode=ParseMode.HTML,
                         )
                     else:
-                        logging.warning(
-                            "Thumbnail unavailable. "
-                            "Sending without thumbnail."
-                        )
+                        logging.warning("Thumbnail unavailable. Sending without thumbnail.")
                         await self.send_document(
                             self.channel_id,
                             file_bytes,
                             file_name=filename,
                             caption=caption,
-                            parse_mode=ParseMode.HTML
+                            parse_mode=ParseMode.HTML,
                         )
 
-                    logging.info(
-                        f"Successfully posted: {file['title']}"
-                    )
+                    logging.info(f"Successfully posted: {file['title']}")
                     return True
 
-                except FloodWait as e:
+                except FloodWait as error:
                     logging.warning(
-                        f"Hit FloodWait! Waiting {e.value}s before retry (attempt {attempt + 1}/{max_retries})..."
+                        f"Hit FloodWait! Waiting {error.value}s before retry "
+                        f"(attempt {attempt + 1}/{max_retries})..."
                     )
-                    await asyncio.sleep(e.value + 2)
+                    await asyncio.sleep(error.value + 2)
                     file_bytes.seek(0)
-                except Exception as doc_err:
-                    logging.error(
-                        f"Failed to send document to Telegram: {doc_err}"
-                    )
+
+                except Exception as doc_error:
+                    logging.error(f"Failed to send document to Telegram: {doc_error}")
                     return False
 
             return False
 
         except Exception as error:
-            logging.error(
-                f"Error processing/downloading TBL file "
-                f"{file['link']}: {error}"
-            )
+            logging.error(f"Error processing/downloading TBL file {file['link']}: {error}")
             return False
+
         finally:
-            if "file_bytes" in locals() and file_bytes:
+            if file_bytes:
                 try:
                     file_bytes.close()
                 except Exception:
                     pass
 
+    # ---------- main loop ----------
+
     async def auto_post_torrents(self):
         logging.info("Automatic 1TamilMV posting started.")
-        is_first_run = True  # Flag to track bot startup
+
+        # Only silently cache on the very first ever run.
+        # If state exists, detect releases added while bot was offline.
+        is_first_run = not self.last_posted and not self.seen_topics
 
         while True:
             try:
-                # Run the blocking network crawler in a worker thread so the MTProto event loop never freezes
-                topics = await asyncio.to_thread(crawl_tbl)
+                topics, crawl_ok = await asyncio.to_thread(crawl_tbl)
 
-                if not topics:
-                    logging.warning("No topics returned from 1TamilMV. Will retry on next check interval.")
+                if not crawl_ok:
+                    logging.warning(
+                        "Crawl was incomplete or failed. Skipping state updates "
+                        "and retrying next interval."
+                    )
+
+                elif not topics:
+                    logging.warning(
+                        "No topics returned from 1TamilMV. Will retry on next check interval."
+                    )
+
                 else:
-                    # Reversing the list posts older unseen topics first
-                    topics.reverse()
+                    topics.reverse()  # older unseen topics first
 
                     if is_first_run:
-                        logging.info("First run detected. Caching current topics silently to avoid spamming old posts.")
+                        logging.info(
+                            "First run detected. Caching current topics silently "
+                            "to avoid spamming old posts."
+                        )
 
                     for topic_data in topics:
                         topic_url = topic_data["topic_url"]
                         releases = topic_data.get("releases", [])
 
-                        def _rel_links(rel):
-                            return [
-                                l for l in (
-                                    rel.get("torrent_link"),
-                                    rel.get("direct_link"),
-                                    rel.get("magnet"),
-                                )
-                                if l
-                            ]
-
-                        # A release counts as "new" only if it has at least one
-                        # link we haven't posted before. This also treats a
-                        # release whose torrent was already sent but which just
-                        # got a direct link added later (site owners upload the
-                        # torrent first, direct link follows) as "has an update"
-                        # -- WITHOUT re-sending the torrent document itself.
                         new_releases = [
-                            rel
-                            for rel in releases
-                            if any(link not in self.last_posted for link in _rel_links(rel))
+                            rel for rel in releases
+                            if any(l not in self.last_posted for l in _rel_links(rel))
                         ]
 
-                        # If this is the bot's first run after restart, cache everything silently
+                        # First-ever run: silently cache
                         if is_first_run:
-                            self.seen_topics.add(topic_url)
+                            self._mark_topic_seen(topic_url)
                             for rel in releases:
                                 for link in _rel_links(rel):
-                                    self.last_posted.add(link)
+                                    self._mark_posted(link)
                             continue
 
-                        # If topic already seen and no new releases, skip
+                        # Already processed topic
                         if topic_url in self.seen_topics and not new_releases:
                             continue
 
                         logging.info(f"Topic: {topic_data.get('title', 'Unknown')}")
                         logging.info(f"New releases to post: {len(new_releases)}")
 
-                        releases_to_send = (
-                            new_releases if topic_url in self.seen_topics else releases
-                        )
+                        already_seen = topic_url in self.seen_topics
+                        releases_to_send = new_releases if already_seen else releases
 
-                        # 1. Send the individual .torrent file documents FIRST
+                        # 1. Send torrent documents
                         for rel in releases_to_send:
                             torrent_link = rel.get("torrent_link")
-                            direct_link = rel.get("direct_link")
-                            magnet = rel.get("magnet")
 
-                            # Only download/send the .torrent file if it hasn't
-                            # been posted already -- this is what stops the bot
-                            # from re-sending the same torrent document just
-                            # because a direct link (or magnet) was added to the
-                            # release afterwards.
                             if torrent_link and torrent_link not in self.last_posted:
                                 file_info = {
                                     "title": rel["title"],
                                     "link": torrent_link,
-                                    "size": rel.get("size", "Unknown")
+                                    "size": rel.get("size", "Unknown"),
                                 }
-                                success = await self.send_torrent(file_info)
-                                if success:
-                                    self.last_posted.add(torrent_link)
+
+                                if await self.send_torrent(file_info):
+                                    self._mark_posted(torrent_link)
                                     await asyncio.sleep(3)
 
-                            # The direct link / magnet are only ever announced
-                            # via the summary post below, never as a separate
-                            # document -- so mark them posted regardless of
-                            # whether a torrent document was (re)sent this
-                            # round, otherwise they'd be treated as "new" again
-                            # on every future check.
-                            if direct_link:
-                                self.last_posted.add(direct_link)
-                            if magnet:
-                                self.last_posted.add(magnet)
-
-                        # 2. Send the Poster + Caption + Direct Link summary post AFTER torrent
+                        # 2. Send summary.
+                        # Direct links/magnets are NOT marked posted until
+                        # Telegram successfully sends the summary.
                         topic_to_post = dict(topic_data)
-                        if topic_url in self.seen_topics:
+                        if already_seen:
                             topic_to_post["releases"] = new_releases
 
-                        summary_posted = await self.send_summary_post(topic_to_post)
-                        if summary_posted:
+                        if await self.send_summary_post(topic_to_post):
+                            for rel in releases_to_send:
+                                if rel.get("direct_link"):
+                                    self._mark_posted(rel["direct_link"])
+                                if rel.get("magnet"):
+                                    self._mark_posted(rel["magnet"])
+
+                            self._mark_topic_seen(topic_url)
                             await asyncio.sleep(2)
 
-                        self.seen_topics.add(topic_url)
-
                     if is_first_run:
-                        logging.info("Initial cache complete. The bot will now only post newly added torrents.")
+                        logging.info(
+                            "Initial cache complete. The bot will now only "
+                            "post newly added torrents."
+                        )
                         is_first_run = False
 
             except asyncio.CancelledError:
                 raise
+
             except Exception as error:
                 logging.error(f"Error in auto_post_torrents: {error}", exc_info=True)
 
@@ -762,13 +755,19 @@ class MN_Bot(Client):
         while True:
             try:
                 await self.auto_post_torrents()
+
             except asyncio.CancelledError:
                 logging.info("Auto-post supervisor cancelled.")
                 break
-            except Exception as e:
-                logging.error(f"Critical error in auto_post_torrents loop: {e}", exc_info=True)
+
+            except Exception as error:
+                logging.error(
+                    f"Critical error in auto_post_torrents loop: {error}", exc_info=True
+                )
                 logging.info("Supervisor restarting auto_post_torrents in 30 seconds...")
                 await asyncio.sleep(30)
+
+    # ---------- lifecycle ----------
 
     async def start(self):
         await super().start()
@@ -776,43 +775,28 @@ class MN_Bot(Client):
         self.thumbnail_path = await asyncio.to_thread(download_thumbnail)
 
         me = await self.get_me()
-
-        if me.username:
-            BOT.USERNAME = f"@{me.username}"
-        else:
-            BOT.USERNAME = me.first_name
+        BOT.USERNAME = f"@{me.username}" if me.username else me.first_name
 
         try:
             await self.send_message(
                 OWNER.ID,
                 text=(
-                    f"{me.first_name} "
-                    f"✅ BOT STARTED\n\n"
+                    f"{me.first_name} ✅ BOT STARTED\n\n"
                     f"📡 Source: 1TamilMV\n"
                     f"🔗 Forum: {FORUM_URL}\n"
                     f"⏱ Check: Every {CHECK_INTERVAL // 60} minutes\n"
-                    f"🖼 Thumbnail: "
-                    f"{'Enabled' if self.thumbnail_path else 'Disabled'}"
-                )
+                    f"🖼 Thumbnail: {'Enabled' if self.thumbnail_path else 'Disabled'}"
+                ),
             )
         except Exception as error:
-            logging.error(
-                f"Could not notify owner: {error}"
-            )
+            logging.error(f"Could not notify owner: {error}")
 
-        logging.info(
-            "RSS-Bot started successfully."
-        )
+        logging.info("RSS-Bot started successfully.")
 
-        # Retain a strong task reference to prevent Python's garbage collector from destroying it mid-run
-        self._crawl_task = asyncio.create_task(
-            self._supervisor_loop()
-        )
+        self._crawl_task = asyncio.create_task(self._supervisor_loop())
 
     async def stop(self, *args):
-        logging.info(
-            "Stopping Rss-Bot..."
-        )
+        logging.info("Stopping Rss-Bot...")
 
         if self._crawl_task and not self._crawl_task.done():
             self._crawl_task.cancel()
@@ -822,15 +806,9 @@ class MN_Bot(Client):
                 pass
 
         await super().stop()
+        logging.info("RSS-Bot stopped.")
 
-        logging.info(
-            "RSS-Bot stopped."
-        )
 
 if __name__ == "__main__":
-    threading.Thread(
-        target=run_flask,
-        daemon=True
-    ).start()
-
+    threading.Thread(target=run_flask, daemon=True).start()
     MN_Bot().run()
