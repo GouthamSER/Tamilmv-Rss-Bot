@@ -398,6 +398,14 @@ def _rel_links(rel):
     return [l for l in (rel.get("torrent_link"), rel.get("direct_link"), rel.get("magnet")) if l]
 
 
+def _norm(url):
+    """Path+query only, no domain. So a domain change doesn't look like a new link."""
+    if not url:
+        return url
+    p = urlparse(url)
+    return p.path + (f"?{p.query}" if p.query else "")
+
+
 class MN_Bot(Client):
     MAX_MSG_LENGTH = 4000
 
@@ -430,14 +438,16 @@ class MN_Bot(Client):
     def _mark_posted(self, link):
         if not link:
             return
-        self.last_posted.add(link)
-        self.db.add_link(link)
+        key = _norm(link)
+        self.last_posted.add(key)
+        self.db.add_link(key)
 
     def _mark_topic_seen(self, topic_url):
         if not topic_url:
             return
-        self.seen_topics.add(topic_url)
-        self.db.add_topic(topic_url)
+        key = _norm(topic_url)
+        self.seen_topics.add(key)
+        self.db.add_topic(key)
 
     # ---------- sending ----------
 
@@ -706,7 +716,7 @@ class MN_Bot(Client):
 
                         new_releases = [
                             rel for rel in releases
-                            if any(l not in self.last_posted for l in _rel_links(rel))
+                            if any(_norm(l) not in self.last_posted for l in _rel_links(rel))
                         ]
 
                         # First-ever run: silently cache
@@ -718,7 +728,7 @@ class MN_Bot(Client):
                             continue
 
                         # Already processed topic
-                        if topic_url in self.seen_topics and not new_releases:
+                        if _norm(topic_url) in self.seen_topics and not new_releases:
                             continue
 
                         # Backlog cap (e.g. after long downtime). Skipped topics stay
@@ -730,14 +740,14 @@ class MN_Bot(Client):
                         logging.info(f"Topic: {topic_data.get('title', 'Unknown')}")
                         logging.info(f"New releases to post: {len(new_releases)}")
 
-                        already_seen = topic_url in self.seen_topics
+                        already_seen = _norm(topic_url) in self.seen_topics
                         releases_to_send = new_releases if already_seen else releases
 
                         # 1. Send torrent documents
                         for rel in releases_to_send:
                             torrent_link = rel.get("torrent_link")
 
-                            if torrent_link and torrent_link not in self.last_posted:
+                            if torrent_link and _norm(torrent_link) not in self.last_posted:
                                 file_info = {
                                     "title": rel["title"],
                                     "link": torrent_link,
@@ -748,14 +758,19 @@ class MN_Bot(Client):
                                     self._mark_posted(torrent_link)
                                     await asyncio.sleep(3)
 
-                        # 2. Send summary.
-                        # Direct links/magnets are NOT marked posted until
-                        # Telegram successfully sends the summary.
-                        topic_to_post = dict(topic_data)
-                        if already_seen:
-                            topic_to_post["releases"] = new_releases
+                        # 2. Send poster+caption ONLY for releases that have a
+                        # direct link. Torrent-only releases already got the
+                        # file in step 1 — no extra poster post for them.
+                        direct_releases = [r for r in releases_to_send if r.get("direct_link")]
 
-                        if await self.send_summary_post(topic_to_post):
+                        topic_to_post = dict(topic_data)
+                        topic_to_post["releases"] = direct_releases
+
+                        summary_sent = True
+                        if direct_releases:
+                            summary_sent = await self.send_summary_post(topic_to_post)
+
+                        if summary_sent:
                             for rel in releases_to_send:
                                 if rel.get("direct_link"):
                                     self._mark_posted(rel["direct_link"])
