@@ -22,7 +22,7 @@
 - 🛡️ **24/7 Supervisor Recovery**: Built-in background supervisor automatically catches transient network errors and restarts scraping cycles without crashing.
 - ⏳ **Smart FloodWait Protection**: Gracefully catches Telegram rate limits and retries automatically without spamming or dropping connections.
 - 🐳 **VPS & Docker Ready**: Includes `docker-compose.yml` and `Dockerfile` configured with `restart: unless-stopped` and unbuffered logging for rock-solid 24/7 uptime.
-- 🌐 **Web Health Check**: Integrated lightweight Flask server on port `5000` for platforms like Render, Koyeb, and Heroku.
+- 🌐 **Web Health Check**: Integrated lightweight Flask server on port `5090` for platforms like Render, Koyeb, and Heroku.
 
 ---
 
@@ -37,7 +37,7 @@ Create a `.env` file in the root directory (or configure them in your hosting pr
 | `API_HASH` | **Yes** | Telegram API Hash from [my.telegram.org](https://my.telegram.org) | `0123456789abcdef0123456789abcdef` |
 | `OWNER` | **Yes** | Telegram User ID of the owner (from [@userinfobot](https://t.me/userinfobot)) | `1892771262` |
 | `CHANNEL_ID` | **Yes** | Target Channel ID (bot must be admin with Post permission) | `-1002194076115` |
-| `PORT` | No | Port for Flask web server (default: `5000`) | `5000` |
+| `PORT` | No | Port for Flask web server (default: `5090`) | `5090` |
 | `PROXY` | No | Optional HTTP/HTTPS or SOCKS5 proxy to bypass ISP domain blocks | `http://127.0.0.1:8080` or `socks5://127.0.0.1:1080` |
 | `BASE_URL` | No | Override starting base URL (defaults to auto-resolving from `WWW.1TAMILMV.FI`) | `https://www.1tamilmv.rocks` |
 
@@ -139,7 +139,7 @@ Using `tmux` creates a persistent terminal session on your VPS so you can monito
      --name tamilmv-bot \
      --restart unless-stopped \
      --env-file .env \
-     -p 5000:5000 \
+     -p 5090:5090 \
      tamilmv-bot
    ```
 

@@ -98,10 +98,21 @@ def create_scraper():
     return session
 
 
-def discover_active_domain():
-    """Follow gateway redirects or read the site banner to find the active domain."""
+_DOMAIN_DISCOVERED = False
+
+
+def discover_active_domain(force=False):
+    """Follow gateway redirects or read the site banner to find the active domain.
+
+    Runs once per process; later crawls reuse BASE_URL. Pass force=True to
+    rediscover (used when the current domain stops answering).
+    """
+    global _DOMAIN_DISCOVERED
     if NETWORK.BASE_URL:
         return _set_base(NETWORK.BASE_URL.rstrip("/"))
+    if _DOMAIN_DISCOVERED and not force:
+        return BASE_URL
+    _DOMAIN_DISCOVERED = True
 
     scraper = create_scraper()
 
@@ -318,12 +329,14 @@ def parse_topic(scraper, topic_url):
                 or any("download" in c for c in classes)
             )
 
-            if is_direct:
-                if href.startswith("http") and not current["direct_link"]:
-                    current["direct_link"] = href
-            elif href.startswith("magnet:"):
+            # Magnet check FIRST: magnet buttons often carry a "download" class
+            # and used to be swallowed by the direct-link branch.
+            if href_lower.startswith("magnet:"):
                 if not current["magnet"]:
                     current["magnet"] = href
+            elif is_direct:
+                if href.startswith("http") and not current["direct_link"]:
+                    current["direct_link"] = href
 
     if not releases:
         return None
@@ -368,7 +381,7 @@ def crawl_tbl():
                 f"Connection to {FORUM_URL} failed ({connection_error}). "
                 "Attempting to rediscover active domain..."
             )
-            discover_active_domain()
+            discover_active_domain(force=True)
             response = scraper.get(FORUM_URL, timeout=20, headers={"Referer": BASE_URL})
             response.raise_for_status()
 
@@ -508,13 +521,6 @@ class MN_Bot(Client):
             self.seen_topics.add(tid)
             self.db.add_topic(tid)
 
-    def _is_topic_seen(self, topic_url):
-        if not topic_url:
-            return False
-        key = _norm(topic_url)
-        tid = _topic_id(topic_url)
-        return key in self.seen_topics or (bool(tid) and tid in self.seen_topics)
-
     # ---------- sending ----------
 
     async def safe_send_message(self, chat_id, text, **kwargs):
@@ -624,15 +630,25 @@ class MN_Bot(Client):
                     image_bytes = None  # photo failure -> fallback
                     await asyncio.sleep(2)
 
+            # Main post already out. A failure on follow-up chunks must NOT
+            # return False, or the whole topic is re-posted next cycle (dupes).
             if sent and remaining_chunks:
                 for chunk in remaining_chunks:
                     await asyncio.sleep(1)
-                    await self.safe_send_message(
-                        self.channel_id,
-                        chunk,
-                        parse_mode=ParseMode.HTML,
-                        disable_web_page_preview=True,
-                    )
+                    for attempt in range(max_retries):
+                        try:
+                            await self.safe_send_message(
+                                self.channel_id,
+                                chunk,
+                                parse_mode=ParseMode.HTML,
+                                disable_web_page_preview=True,
+                            )
+                            break
+                        except FloodWait as error:
+                            await asyncio.sleep(error.value + 2)
+                        except Exception as error:
+                            logging.error(f"Failed to send summary chunk: {error}")
+                            break
 
             return sent
 
