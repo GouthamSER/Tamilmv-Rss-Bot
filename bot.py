@@ -492,6 +492,7 @@ class MN_Bot(Client):
         self.seen_topics = set()
         self.thumbnail_path = None
         self._crawl_task = None
+        self.fail_counts = {}  # torrent link -> failed send count
 
         # Persistent state (Mongo if MONGO_URI set, else SQLite)
         self.db = StateDB()
@@ -836,7 +837,27 @@ class MN_Bot(Client):
 
                                 if await self.send_torrent(file_info):
                                     self._mark_posted(torrent_link)
+                                    self.fail_counts.pop(_norm(torrent_link), None)
                                     await asyncio.sleep(3)
+                                else:
+                                    key = _norm(torrent_link)
+                                    self.fail_counts[key] = self.fail_counts.get(key, 0) + 1
+                                    if self.fail_counts[key] >= LIMITS.MAX_RETRIES:
+                                        logging.error(
+                                            f"Giving up on torrent after {self.fail_counts[key]} "
+                                            f"failed attempts: {rel['title']}"
+                                        )
+                                        self._mark_posted(torrent_link)
+                                        self.fail_counts.pop(key, None)
+                                        try:
+                                            await self.send_message(
+                                                OWNER.ID,
+                                                f"⚠️ Gave up on torrent after "
+                                                f"{LIMITS.MAX_RETRIES} fails:\n{rel['title']}\n{torrent_link}",
+                                                disable_web_page_preview=True,
+                                            )
+                                        except Exception:
+                                            pass
 
                         # 2. Send poster+caption ONLY for releases that have a
                         # direct link. Torrent-only releases already got the
@@ -938,6 +959,7 @@ class MN_Bot(Client):
                 pass
 
         await super().stop()
+        await asyncio.to_thread(self.db.close)
         logging.info("RSS-Bot stopped.")
 
 
