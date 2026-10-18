@@ -5,6 +5,7 @@ MONGO_URI set   -> saved in MongoDB (survives redeploys)
 MONGO_URI empty -> bot still starts, nothing is saved, a log line says so
 """
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from config import DATABASE
 
@@ -14,6 +15,8 @@ class StateDB:
         self.links = None
         self.topics = None
         self.meta = None
+        # One worker = writes stay ordered, and callers (async code) never block on Mongo.
+        self._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="db-writer")
 
         if not DATABASE.MONGO_URI:
             logging.warning("MONGO_URI not set. Bot starts, but state is NOT saved.")
@@ -50,20 +53,28 @@ class StateDB:
             return set(), set()
 
     def add_link(self, link):
-        if not self.enabled:
-            return
+        if self.enabled:
+            self._writer.submit(self._add_link, link)
+
+    def _add_link(self, link):
         try:
             self.links.update_one({"_id": link}, {"$setOnInsert": {"_id": link}}, upsert=True)
         except Exception as error:
             logging.error(f"DB add_link failed: {error}")
 
     def add_topic(self, url):
-        if not self.enabled:
-            return
+        if self.enabled:
+            self._writer.submit(self._add_topic, url)
+
+    def _add_topic(self, url):
         try:
             self.topics.update_one({"_id": url}, {"$setOnInsert": {"_id": url}}, upsert=True)
         except Exception as error:
             logging.error(f"DB add_topic failed: {error}")
+
+    def close(self):
+        """Flush pending writes before shutdown."""
+        self._writer.shutdown(wait=True)
 
     # ---------- thumbnail (image stored in DB, not kept in RAM) ----------
 
