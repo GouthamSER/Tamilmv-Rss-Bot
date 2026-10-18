@@ -51,8 +51,9 @@ GATEWAY_DOMAINS = [
 BASE_URL = NETWORK.BASE_URL.rstrip("/") if NETWORK.BASE_URL else "https://www.1tamilmv.rocks"
 FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
 
-MAX_TOPICS = 13
-CHECK_INTERVAL = 600
+MAX_TOPICS = getattr(LIMITS, "MAX_TOPICS", 30)
+CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", 600))
+DEAD_TOPICS = set()
 
 THUMB_URL = os.getenv("THUMB_URL") or "https://i.ibb.co/DPrwsGsC/IMG-20260919-174828-023.jpg"
 THUMB_PATH = os.path.join(tempfile.gettempdir(), "tbl_thumb.jpg")
@@ -245,8 +246,23 @@ def parse_topic(scraper, topic_url):
     """Fetch one topic page. Returns topic dict or None."""
     logging.info(f"Checking topic: {topic_url}")
 
-    r = scraper.get(topic_url, timeout=20, headers={"Referer": FORUM_URL})
-    r.raise_for_status()
+    if _norm(topic_url) in DEAD_TOPICS:
+        logging.debug(f"Skipping known dead topic: {topic_url}")
+        return None
+
+    try:
+        r = scraper.get(topic_url, timeout=20, headers={"Referer": FORUM_URL})
+        if r.status_code in (404, 410):
+            logging.warning(f"Topic not found ({r.status_code}, deleted/moved): {topic_url}")
+            DEAD_TOPICS.add(_norm(topic_url))
+            return None
+        r.raise_for_status()
+    except requests.exceptions.HTTPError as err:
+        if err.response is not None and err.response.status_code in (404, 410):
+            logging.warning(f"Topic not found ({err.response.status_code}): {topic_url}")
+            DEAD_TOPICS.add(_norm(topic_url))
+            return None
+        raise
 
     soup = BeautifulSoup(r.text, "html.parser")
     post = (
@@ -358,18 +374,45 @@ def crawl_tbl():
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        topic_links = []
+        # 1. Prioritize RECENTLY ADDED widget topics first
+        recently_added_links = []
+        other_banger_links = []
+
+        for b in soup.find_all("div", class_="banger-container"):
+            header = b.find("div", class_="banger-header")
+            header_text = header.get_text() if header else b.get_text()
+            is_recent = "RECENTLY ADDED" in header_text.upper()
+
+            for a in b.find_all("a", href=True):
+                href = a.get("href", "").strip()
+                if not href:
+                    continue
+                if re.search(r"index\.php\?/forums/topic/", href, re.IGNORECASE) and not href.endswith("-0/"):
+                    full_url = urljoin(BASE_URL, href)
+                    if is_recent:
+                        recently_added_links.append(full_url)
+                    else:
+                        other_banger_links.append(full_url)
+
+        # 2. General links on page (fallback)
+        general_links = []
         for a in soup.find_all("a", href=True):
             href = a.get("href", "").strip()
             if not href:
                 continue
             if re.search(r"index\.php\?/forums/topic/", href, re.IGNORECASE) and not href.endswith("-0/"):
-                topic_links.append(urljoin(BASE_URL, href))
+                general_links.append(urljoin(BASE_URL, href))
 
-        topic_links = list(dict.fromkeys(topic_links))
-        logging.info(f"Found {len(topic_links)} topic links.")
+        combined = recently_added_links + other_banger_links + general_links
+        topic_links = list(dict.fromkeys(combined))
+        logging.info(
+            f"Found {len(topic_links)} topic links "
+            f"({len(list(dict.fromkeys(recently_added_links)))} in Recently Added)."
+        )
 
         for topic_url in topic_links[:MAX_TOPICS]:
+            if _norm(topic_url) in DEAD_TOPICS:
+                continue
             try:
                 topic = parse_topic(scraper, topic_url)
                 if topic:
@@ -378,11 +421,11 @@ def crawl_tbl():
                 topic_parse_failed = True
                 logging.error(f"Failed to parse topic {topic_url}: {topic_error}")
 
-        crawl_ok = not topic_parse_failed
+        crawl_ok = bool(topics) or not topic_links
 
         if topic_parse_failed:
             logging.warning(
-                "One or more topics failed to parse; treating this crawl as incomplete."
+                "One or more topics failed to parse; continuing with successfully parsed topics."
             )
 
         logging.info(f"1TamilMV crawl completed. Topics with releases: {len(topics)}")
@@ -399,11 +442,23 @@ def _rel_links(rel):
 
 
 def _norm(url):
-    """Path+query only, no domain. So a domain change doesn't look like a new link."""
+    """Path+query only, no domain, stripped of trailing slashes.
+    Ensures domain migrations or trailing slash variations don't look like new links.
+    """
     if not url:
         return url
     p = urlparse(url)
-    return p.path + (f"?{p.query}" if p.query else "")
+    path = p.path.rstrip("/")
+    query = p.query.rstrip("/")
+    return (path or "/") + (f"?{query}" if query else "")
+
+
+def _topic_id(url):
+    """Extract numeric topic ID if present (e.g. topic_id:199652)."""
+    if not url:
+        return ""
+    m = re.search(r"/topic/(\d+)", url)
+    return f"topic_id:{m.group(1)}" if m else ""
 
 
 class MN_Bot(Client):
@@ -448,6 +503,17 @@ class MN_Bot(Client):
         key = _norm(topic_url)
         self.seen_topics.add(key)
         self.db.add_topic(key)
+        tid = _topic_id(topic_url)
+        if tid:
+            self.seen_topics.add(tid)
+            self.db.add_topic(tid)
+
+    def _is_topic_seen(self, topic_url):
+        if not topic_url:
+            return False
+        key = _norm(topic_url)
+        tid = _topic_id(topic_url)
+        return key in self.seen_topics or (bool(tid) and tid in self.seen_topics)
 
     # ---------- sending ----------
 
@@ -688,9 +754,9 @@ class MN_Bot(Client):
             try:
                 topics, crawl_ok = await asyncio.to_thread(crawl_tbl)
 
-                if not crawl_ok:
+                if not crawl_ok and not topics:
                     logging.warning(
-                        "Crawl was incomplete or failed. Skipping state updates "
+                        "Crawl failed or site unreachable. Skipping state updates "
                         "and retrying next interval."
                     )
 
@@ -728,7 +794,7 @@ class MN_Bot(Client):
                             continue
 
                         # Already processed topic
-                        if _norm(topic_url) in self.seen_topics and not new_releases:
+                        if self._is_topic_seen(topic_url) and not new_releases:
                             continue
 
                         # Backlog cap (e.g. after long downtime). Skipped topics stay
@@ -740,7 +806,7 @@ class MN_Bot(Client):
                         logging.info(f"Topic: {topic_data.get('title', 'Unknown')}")
                         logging.info(f"New releases to post: {len(new_releases)}")
 
-                        already_seen = _norm(topic_url) in self.seen_topics
+                        already_seen = self._is_topic_seen(topic_url)
                         releases_to_send = new_releases if already_seen else releases
 
                         # 1. Send torrent documents
@@ -774,7 +840,7 @@ class MN_Bot(Client):
                             for rel in releases_to_send:
                                 if rel.get("direct_link"):
                                     self._mark_posted(rel["direct_link"])
-                                if rel.get("magnet"):
+                                if rel.get("magnet") and (_norm(rel.get("torrent_link")) in self.last_posted or not rel.get("torrent_link")):
                                     self._mark_posted(rel["magnet"])
 
                             self._mark_topic_seen(topic_url)

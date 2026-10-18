@@ -64,7 +64,10 @@ class LIMITS:
     """
     POST_LIMIT: Max topics posted per check cycle. Extra backlog carries to the next cycle.
     CATCHUP_INTERVAL: Seconds to wait before the next cycle while backlog remains.
+    MAX_TOPICS: Maximum number of topic URLs to fetch and check per cycle.
     """
-    POST_LIMIT = int(os.environ.get("POST_LIMIT", 3))
+    POST_LIMIT = int(os.environ.get("POST_LIMIT", 5))
     CATCHUP_INTERVAL = int(os.environ.get("CATCHUP_INTERVAL", 120))
+    MAX_TOPICS = int(os.environ.get("MAX_TOPICS", 30))
+
 
