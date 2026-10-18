@@ -744,9 +744,8 @@ class MN_Bot(Client):
     async def auto_post_torrents(self):
         logging.info("Automatic 1TamilMV posting started.")
 
-        # Only silently cache on the very first ever run.
-        # If state exists, detect releases added while bot was offline.
-        is_first_run = not self.last_posted and not self.seen_topics
+        # Only silently cache on the very first ever run or when START_FRESH is enabled.
+        is_first_run = (not self.last_posted and not self.seen_topics) or getattr(LIMITS, "START_FRESH", False)
 
         while True:
             backlog = False
@@ -766,12 +765,11 @@ class MN_Bot(Client):
                     )
 
                 else:
-                    topics.reverse()  # older unseen topics first
-
+                    # Process newest uploads first (no reverse), so new torrents are posted immediately!
                     if is_first_run:
                         logging.info(
-                            "First run detected. Caching current topics silently "
-                            "to avoid spamming old posts."
+                            "Fresh start / initial cache detected. Caching current topics silently "
+                            "to avoid spamming old posts. Only new torrents uploaded after this will be posted."
                         )
 
                     posted_topics = 0
@@ -785,7 +783,7 @@ class MN_Bot(Client):
                             if any(_norm(l) not in self.last_posted for l in _rel_links(rel))
                         ]
 
-                        # First-ever run: silently cache
+                        # First run / Start fresh: silently cache
                         if is_first_run:
                             self._mark_topic_seen(topic_url)
                             for rel in releases:
@@ -793,12 +791,12 @@ class MN_Bot(Client):
                                     self._mark_posted(link)
                             continue
 
-                        # Already processed topic
-                        if self._is_topic_seen(topic_url) and not new_releases:
+                        # If no new releases exist in this topic, skip it completely!
+                        if not new_releases:
+                            self._mark_topic_seen(topic_url)
                             continue
 
-                        # Backlog cap (e.g. after long downtime). Skipped topics stay
-                        # unmarked, so the next cycle picks them up (oldest first).
+                        # Backlog cap (e.g. after long downtime).
                         if posted_topics >= LIMITS.POST_LIMIT:
                             backlog = True
                             break
@@ -806,8 +804,8 @@ class MN_Bot(Client):
                         logging.info(f"Topic: {topic_data.get('title', 'Unknown')}")
                         logging.info(f"New releases to post: {len(new_releases)}")
 
-                        already_seen = self._is_topic_seen(topic_url)
-                        releases_to_send = new_releases if already_seen else releases
+                        # ALWAYS send ONLY new_releases (never old releases already posted)
+                        releases_to_send = new_releases
 
                         # 1. Send torrent documents
                         for rel in releases_to_send:

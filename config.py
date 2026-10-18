@@ -68,6 +68,7 @@ class LIMITS:
     """
     POST_LIMIT = int(os.environ.get("POST_LIMIT", 5))
     CATCHUP_INTERVAL = int(os.environ.get("CATCHUP_INTERVAL", 120))
-    MAX_TOPICS = int(os.environ.get("MAX_TOPICS", 30))
+    MAX_TOPICS = int(os.environ.get("MAX_TOPICS", 15))
+    START_FRESH = os.environ.get("START_FRESH", "False").lower() in ("true", "1", "yes")
 
 
