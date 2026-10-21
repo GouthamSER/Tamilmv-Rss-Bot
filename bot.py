@@ -416,14 +416,31 @@ def crawl_tbl():
             if re.search(r"index\.php\?/forums/topic/", href, re.IGNORECASE) and not href.endswith("-0/"):
                 general_links.append(urljoin(BASE_URL, href))
 
-        combined = recently_added_links + other_banger_links + general_links
-        topic_links = list(dict.fromkeys(combined))
+        # "TOP RELEASES THIS WEEK" holds the NEWEST uploads (e.g. fresh PreDVDs) and
+        # they are often NOT in "Recently Added". Always scan ALL of them first,
+        # then the first MAX_TOPICS of Recently Added / general links.
+        def _dedupe(urls):
+            seen, out = set(), []
+            for u in urls:
+                k = _topic_id(u) or _norm(u)
+                if k not in seen:
+                    seen.add(k)
+                    out.append(u)
+            return out
+
+        top_links = _dedupe(other_banger_links)
+        rest_links = _dedupe(recently_added_links + general_links)
+        top_keys = {_topic_id(u) or _norm(u) for u in top_links}
+        rest_links = [u for u in rest_links if (_topic_id(u) or _norm(u)) not in top_keys]
+
+        topic_links = top_links + rest_links
+        scan_limit = len(top_links) + MAX_TOPICS
         logging.info(
-            f"Found {len(topic_links)} topic links "
-            f"({len(list(dict.fromkeys(recently_added_links)))} in Recently Added)."
+            f"Found {len(topic_links)} topics: {len(top_links)} in Top Releases, "
+            f"{len(_dedupe(recently_added_links))} in Recently Added. Scanning {min(scan_limit, len(topic_links))}."
         )
 
-        for topic_url in topic_links[:MAX_TOPICS]:
+        for topic_url in topic_links[:scan_limit]:
             if _norm(topic_url) in DEAD_TOPICS:
                 continue
             try:
