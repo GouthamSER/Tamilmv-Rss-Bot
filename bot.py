@@ -45,14 +45,14 @@ def run_flask():
 GATEWAY_DOMAINS = [
     "https://www.1tamilmv.fi",
     "https://1tamilmv.fi",
-    "https://www.1tamilmv.rocks",
+    "https://www.1tamilmv.solar/",
 ]
 
 BASE_URL = NETWORK.BASE_URL.rstrip("/") if NETWORK.BASE_URL else "https://www.1tamilmv.rocks"
 FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
 
 MAX_TOPICS = getattr(LIMITS, "MAX_TOPICS", 30)
-CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", 600))
+CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", 360))
 DEAD_TOPICS = set()
 
 THUMB_URL = os.getenv("THUMB_URL") or "https://i.ibb.co/DPrwsGsC/IMG-20260919-174828-023.jpg"
