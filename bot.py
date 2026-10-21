@@ -451,7 +451,8 @@ def crawl_tbl():
 
 
 def _rel_links(rel):
-    return [l for l in (rel.get("torrent_link"), rel.get("direct_link"), rel.get("magnet")) if l]
+    """Links that decide whether a release is NEW (magnet is never posted, so it must not count)."""
+    return [l for l in (rel.get("torrent_link"), rel.get("direct_link")) if l]
 
 
 def _norm(url):
@@ -790,6 +791,12 @@ class MN_Bot(Client):
                         )
 
                     posted_topics = 0
+                    pending = sum(
+                        1 for t in topics
+                        if any(_norm(l) not in self.last_posted
+                               for r in t.get("releases", []) for l in _rel_links(r))
+                    )
+                    logging.info(f"{pending}/{len(topics)} topics have new releases.")
 
                     for topic_data in topics:
                         topic_url = topic_data["topic_url"]
@@ -875,8 +882,6 @@ class MN_Bot(Client):
                             for rel in releases_to_send:
                                 if rel.get("direct_link"):
                                     self._mark_posted(rel["direct_link"])
-                                if rel.get("magnet") and (_norm(rel.get("torrent_link")) in self.last_posted or not rel.get("torrent_link")):
-                                    self._mark_posted(rel["magnet"])
 
                             self._mark_topic_seen(topic_url)
                             posted_topics += 1
