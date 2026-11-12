@@ -45,10 +45,10 @@ def run_flask():
 GATEWAY_DOMAINS = [
     "https://www.1tamilmv.fi",
     "https://1tamilmv.fi",
-    "https://www.1tamilmv.solar/",
+    "https://www.1tamilmv.io",
 ]
 
-BASE_URL = NETWORK.BASE_URL.rstrip("/") if NETWORK.BASE_URL else "https://www.1tamilmv.rocks"
+BASE_URL = NETWORK.BASE_URL.rstrip("/") if NETWORK.BASE_URL else "https://www.1tamilmv.io"
 FORUM_URL = f"{BASE_URL}/index.php?/forums/topic/"
 
 MAX_TOPICS = getattr(LIMITS, "MAX_TOPICS", 30)
